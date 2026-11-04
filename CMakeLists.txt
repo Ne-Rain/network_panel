@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.18)
 
-project(cpp-matrix-benchmark)
+project(network_panel)
 
 find_package(OpenSSL 3.0 REQUIRED COMPONENTS SSL Crypto)
 find_package(Threads REQUIRED)
