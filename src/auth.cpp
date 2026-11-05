@@ -7,6 +7,7 @@
 #include <iostream>
 #include <openssl/evp.h>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -44,7 +45,7 @@ bool decode_base64(const std::string& encoded, std::string& decoded) {
 std::unordered_map<std::string, GroupAccount> load_accounts(const std::string& path) {
     std::ifstream in(path);
     if (!in) {
-        throw;
+        throw std::runtime_error("file open failed");
     }
     std::unordered_map<std::string, GroupAccount> group_accounts;
     std::string line;

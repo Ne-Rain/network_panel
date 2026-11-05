@@ -21,7 +21,7 @@ int main() {
 
     std::unordered_map<std::string, GroupAccount> loaded_accounts;
     try {
-        loaded_accounts = load_accounts("config/group.txt");
+        loaded_accounts = load_accounts("config/groups.txt");
     } catch (const std::exception& e) {
         std::cerr << "加载账号失败: " << e.what() << '\n';
         return 1;
