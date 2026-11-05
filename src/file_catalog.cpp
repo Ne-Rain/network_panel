@@ -35,7 +35,7 @@ std::unordered_map<std::size_t, FileRecord> load_files(const std::string& path) 
             throw std::runtime_error("line_id: " + std::to_string(line_id) + "is illegal");
         }
         if (file_list.find(file_record.file_id) != file_list.end()) {
-            continue;
+            throw std::runtime_error("line_id: " + std::to_string(line_id) + "is already existed");
         }
         file_list.emplace(file_record.file_id, file_record);
     }

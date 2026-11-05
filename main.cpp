@@ -1,4 +1,5 @@
 #include "file_catalog.hpp"
+#include "tool.h"
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -70,6 +71,43 @@ int main() {
         }
         res.status = 200;
         res.set_content(request_group_file_list, "text/plain");
+    });
+
+    server.Get("/file/([0-9]+))", [&accounts, &file_list](const httplib::Request& req, httplib::Response& res) {
+        std::string group;
+        std::size_t auth_header_vaule_count = req.get_header_value_count("Authorization");
+        if (auth_header_vaule_count == 0) {
+            group = "PUBLIC";
+        } else if (auth_header_vaule_count > 1 ||
+                   !authenticate_basic(req.get_header_value("Authorization"), accounts, group)) {
+            res.status = 401;
+            res.set_header("WWW-Authenticate", "Basic realm=\"netpanel\"");
+            res.set_content("authentication required", "text/plain");
+            return;
+        }
+        const std::string id_text = req.matches[1].str();
+        std::size_t file_id = 0;
+        if (!string_to_size_t(id_text, file_id)) {
+            res.status = 401;
+            return;
+        }
+        auto it = file_list.find(file_id);
+        if (it == file_list.end()) {
+            res.status = 401;
+            return;
+        }
+        if (it->second.owner_group != group && it->second.owner_group != "PUBLIC") {
+            res.status = 404;
+            return;
+        }
+        auto dot = it->second.display_name.rfind('.');
+        std::string suffix{};
+        if (dot != std::string::npos && dot + 1 < it->second.display_name.size()) {
+            suffix = it->second.display_name.substr(dot + 1); // 提取后缀名
+        }
+        res.status = 200;
+        res.set_header("Content-Disposition", "attachment; filename=\"" + it->second.display_name + "\"");
+        res.set_file_content(it->second.storage_path, "application/" + suffix);
     });
 
     if (!server.listen("127.0.0.1", 8443)) {

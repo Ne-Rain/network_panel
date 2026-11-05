@@ -14,5 +14,5 @@ struct FileRecord {
 
 std::unordered_map<std::size_t, FileRecord> load_files(const std::string& path);
 
-std::vector<FileRecord> get_group_file_list(const std::unordered_map<std::size_t, FileRecord> file_list,
+std::vector<FileRecord> get_group_file_list(const std::unordered_map<std::size_t, FileRecord>& file_list,
                                             std::string group);
