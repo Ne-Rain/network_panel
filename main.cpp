@@ -1,4 +1,5 @@
 #include "file_catalog.hpp"
+#include <cstddef>
 #include <string>
 #include <vector>
 #define CPPHTTPLIB_OPENSSL_SUPPORT
@@ -23,7 +24,7 @@ int main() {
     }
 
     std::unordered_map<std::string, GroupAccount> loaded_accounts;
-    std::vector<FileRecord> loaded_file_list;
+    std::unordered_map<std::size_t, FileRecord> loaded_file_list;
     try {
         loaded_accounts = load_accounts("config/groups.txt");
         loaded_file_list = load_files("config/files.txt");
@@ -51,15 +52,15 @@ int main() {
 
     server.Get("/files", [&accounts, &file_list](const httplib::Request& req, httplib::Response& res) {
         std::string group;
-        const bool valid = req.get_header_value_count("Authorization") == 1;
-        if (!valid) {
+        std::size_t auth_header_vaule_count = req.get_header_value_count("Authorization");
+        if (auth_header_vaule_count == 0) {
+            group = "PUBLIC";
+        } else if (auth_header_vaule_count > 1 ||
+                   !authenticate_basic(req.get_header_value("Authorization"), accounts, group)) {
             res.status = 401;
             res.set_header("WWW-Authenticate", "Basic realm=\"netpanel\"");
             res.set_content("authentication required", "text/plain");
             return;
-        }
-        if (!authenticate_basic(req.get_header_value("Authorization"), accounts, group)) {
-            group = "PUBLIC";
         }
         std::vector<FileRecord> group_file_list = get_group_file_list(file_list, group);
         std::string request_group_file_list;

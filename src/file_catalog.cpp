@@ -1,5 +1,4 @@
 #include "file_catalog.hpp"
-#include "auth.hpp"
 #include <cctype>
 #include <climits>
 #include <cstddef>
@@ -11,12 +10,12 @@
 #include <string>
 #include <vector>
 
-std::vector<FileRecord> load_files(const std::string& path) {
+std::unordered_map<std::size_t, FileRecord> load_files(const std::string& path) {
     std::ifstream in(path);
     if (!in) {
         throw std::runtime_error("file open failed");
     }
-    std::vector<FileRecord> file_list;
+    std::unordered_map<std::size_t, FileRecord> file_list;
     std::string line;
     std::size_t line_id = 0;
     while (std::getline(in, line)) {
@@ -35,7 +34,10 @@ std::vector<FileRecord> load_files(const std::string& path) {
         if (iss >> tmp) { // 判断是否有多余字段
             throw std::runtime_error("line_id: " + std::to_string(line_id) + "is illegal");
         }
-        file_list.push_back(file_record);
+        if (file_list.find(file_record.file_id) != file_list.end()) {
+            continue;
+        }
+        file_list.emplace(file_record.file_id, file_record);
     }
     if (in.bad()) { // 读取文件发生IO错误
         throw std::runtime_error("Failed to read account file: " + path);
@@ -46,11 +48,12 @@ std::vector<FileRecord> load_files(const std::string& path) {
     return file_list;
 }
 
-std::vector<FileRecord> get_group_file_list(const std::vector<FileRecord>& file_list, std::string group) {
+std::vector<FileRecord> get_group_file_list(const std::unordered_map<std::size_t, FileRecord>& file_list,
+                                            std::string group) {
     std::vector<FileRecord> group_file_list;
     for (const auto file_record : file_list) {
-        if (file_record.owner_group == group || file_record.owner_group == "PUBLIC") {
-            group_file_list.push_back(file_record);
+        if (file_record.second.owner_group == group || file_record.second.owner_group == "PUBLIC") {
+            group_file_list.push_back(file_record.second);
         }
     }
     return group_file_list;

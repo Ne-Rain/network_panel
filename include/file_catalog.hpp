@@ -1,8 +1,8 @@
 #pragma once
 
-#include "auth.hpp"
 #include <cstddef>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 struct FileRecord {
@@ -12,6 +12,7 @@ struct FileRecord {
     std::string storage_path;
 };
 
-std::vector<FileRecord> load_files(const std::string& path);
+std::unordered_map<std::size_t, FileRecord> load_files(const std::string& path);
 
-std::vector<FileRecord> get_group_file_list(const std::vector<FileRecord>& file_list, std::string group);
+std::vector<FileRecord> get_group_file_list(const std::unordered_map<std::size_t, FileRecord> file_list,
+                                            std::string group);
