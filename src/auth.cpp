@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cctype>
 #include <climits>
+#include <cstddef>
 #include <fcntl.h>
 #include <fstream>
 #include <iostream>
@@ -49,13 +50,32 @@ std::unordered_map<std::string, GroupAccount> load_accounts(const std::string& p
     }
     std::unordered_map<std::string, GroupAccount> group_accounts;
     std::string line;
+    std::size_t line_id = 0;
     while (std::getline(in, line)) {
+        // 跳过空行，以及只包含空格、Tab、回车的行
+        if (line.find_first_not_of(" \t\r") == std::string::npos) {
+            continue;
+        }
+        ++line_id;
         GroupAccount group_account;
         std::istringstream iss(line);
-        iss >> group_account.username >> group_account.password >> group_account.group;
-        if (group_accounts.find(group_account.username) == group_accounts.end()) {
-            group_accounts.emplace(group_account.username, group_account);
+        if (!(iss >> group_account.username >> group_account.password >> group_account.group)) {
+            throw std::runtime_error("line_id: " + std::to_string(line_id) + "is illegal");
         }
+        std::string tmp;
+        if (iss >> tmp) { // 判断是否有多余字段
+            throw std::runtime_error("line_id: " + std::to_string(line_id) + "is illegal");
+        }
+        if (group_accounts.find(group_account.username) != group_accounts.end()) {
+            throw std::runtime_error("line_id: " + std::to_string(line_id) + "is already existed");
+        }
+        group_accounts.emplace(group_account.username, group_account);
+    }
+    if (in.bad()) { // 读取文件发生IO错误
+        throw std::runtime_error("Failed to read account file: " + path);
+    }
+    if (group_accounts.empty()) {
+        throw std::runtime_error("account file is empty");
     }
     return group_accounts;
 }
@@ -103,10 +123,10 @@ bool authenticate_basic(const std::string& authorization,
     std::string username = credentials.substr(0, colon);
     std::string password = credentials.substr(colon + 1);
     auto it = accounts.find(username);
-    if(it == accounts.end()){
+    if (it == accounts.end()) {
         return false;
     }
-    if(it->second.password != password){
+    if (it->second.password != password) {
         return false;
     }
     group = it->second.group;

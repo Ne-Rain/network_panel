@@ -35,7 +35,7 @@ int main() {
                            authenticate_basic(req.get_header_value("Authorization"), accounts, group);
         if (!valid) {
             res.status = 401;
-            res.set_header("WWW-Authenticate", "Basic realm\"netpanel\"");
+            res.set_header("WWW-Authenticate", "Basic realm=\"netpanel\"");
             res.set_content("authentication required", "text/plain");
             return;
         }
