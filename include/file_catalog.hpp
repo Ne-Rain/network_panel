@@ -14,7 +14,4 @@ struct FileRecord {
 
 std::vector<FileRecord> load_files(const std::string& path);
 
-std::vector<FileRecord> get_group_file_list(const std::string& authorization,
-                                            const std::vector<FileRecord>& file_list,
-                                            const std::unordered_map<std::string, GroupAccount>& accounts,
-                                            std::string& group);
+std::vector<FileRecord> get_group_file_list(const std::vector<FileRecord>& file_list, std::string group);

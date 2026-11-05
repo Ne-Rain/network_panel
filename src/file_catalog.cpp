@@ -46,16 +46,10 @@ std::vector<FileRecord> load_files(const std::string& path) {
     return file_list;
 }
 
-std::vector<FileRecord> get_group_file_list(const std::string& authorization,
-                                            const std::vector<FileRecord>& file_list,
-                                            const std::unordered_map<std::string, GroupAccount>& accounts,
-                                            std::string group) {
-    if (!authenticate_basic(authorization, accounts, group)) {
-        group = "PUBLIC";
-    }
+std::vector<FileRecord> get_group_file_list(const std::vector<FileRecord>& file_list, std::string group) {
     std::vector<FileRecord> group_file_list;
-    for(const auto file_record : file_list){
-        if(file_record.owner_group == group){
+    for (const auto file_record : file_list) {
+        if (file_record.owner_group == group || file_record.owner_group == "PUBLIC") {
             group_file_list.push_back(file_record);
         }
     }
