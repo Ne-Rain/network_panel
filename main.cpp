@@ -17,16 +17,23 @@
 #include <unordered_map>
 
 static const std::regex valid_name(R"([A-Za-z0-9][A-Za-z0-9._-]{0,127})");
+static const std::string config_last_file_id = "./config/last_file_id.txt";
+static const std::string config_files = "./config/files.txt";
+static const std::string config_upload_dir = "./config/upload_dir.txt";
+static const std::string config_groups = "./config/groups.txt";
 
 // 分配文件编号
-std::size_t reserve_file_id(std::mutex& id_mtx, std::size_t last_file_id) {
+std::size_t reserve_file_id(std::mutex& id_mtx, std::size_t& last_file_id) {
     std::lock_guard<std::mutex> lock(id_mtx);
     if (last_file_id == std::numeric_limits<std::size_t>::max()) {
         throw std::overflow_error("file_id is limited");
     }
     const std::size_t next_id = last_file_id + 1;
-    const char* path = "./config/last_file_id.txt";
-    const char* tmp_path = "./config/last_file_id.txt.tmp";
+
+    const char* path = config_last_file_id.c_str();
+    std::string tmp = config_last_file_id + ".tmp";
+    const char* tmp_path = tmp.c_str();
+
     std::ofstream out(tmp_path, std::ios::trunc);
     if (!out) {
         throw std::runtime_error("Failed to open tmp_file");
@@ -62,11 +69,10 @@ std::string make_upload_tmp_path(const std::string& upload_dir, std::size_t id) 
     return std::string(path.data());
 }
 
-bool publish_upload(std::size_t id, std::string name, std::string group, std::string temp_path,
-                    std::string upload_dir) {
+bool publish_upload(std::size_t id, std::string name, std::string group, std::string temp_path, std::string upload_dir,
+                    FileRecord& upload_file_record) {
     std::string path = upload_dir + "/" + std::to_string(id);
-    std::ofstream out(temp_path, std::ios::trunc);
-    if (!out || std::rename(temp_path.c_str(), path.c_str()) != 0) {
+    if (std::rename(temp_path.c_str(), path.c_str()) != 0) {
         std::remove(temp_path.c_str());
         throw std::runtime_error("Failed to save file");
     }
@@ -76,10 +82,14 @@ bool publish_upload(std::size_t id, std::string name, std::string group, std::st
         throw std::runtime_error("Failed to open file_list");
     }
     file_list_out << id << ' ' << name << ' ' << group << ' ' << path << '\n';
-    out.close();
-    if(!out){
+    file_list_out.close();
+    if (!file_list_out) {
         throw std::runtime_error("Failed to writer file_list");
     }
+    upload_file_record.file_id = id;
+    upload_file_record.display_name = name;
+    upload_file_record.owner_group = group;
+    upload_file_record.storage_path = path;
     return true;
 }
 
@@ -95,7 +105,7 @@ int main() {
     std::mutex file_id_mtx;
     std::size_t last_file_id; // 最后的文件编号
     std::string upload_dir;   // 文件上传路径
-    std::ifstream last_file_id_in("./config/last_file_id.txt");
+    std::ifstream last_file_id_in(config_last_file_id);
     if (!last_file_id_in) {
         throw std::runtime_error("last_file_id_file open failed");
     }
@@ -110,7 +120,7 @@ int main() {
             return 1;
         }
     }
-    std::ifstream upload_dir_in("./config/upload_dir.txt");
+    std::ifstream upload_dir_in(config_upload_dir);
     if (!upload_dir_in) {
         throw std::runtime_error("upload_dir_file open failed");
     }
@@ -122,15 +132,16 @@ int main() {
     std::unordered_map<std::string, GroupAccount> loaded_accounts;
     std::unordered_map<std::size_t, FileRecord> loaded_file_list;
     try {
-        loaded_accounts = load_accounts("config/groups.txt");
-        loaded_file_list = load_files("config/files.txt");
+        loaded_accounts = load_accounts(config_groups);
+        loaded_file_list = load_files(config_files);
     } catch (const std::exception& e) {
         std::cerr << "Failed to load accounts or files: " << e.what() << '\n';
         return 1;
     }
 
-    const auto accounts = std::move(loaded_accounts);
-    const auto file_list = std::move(loaded_file_list);
+    const auto accounts = std::move(loaded_accounts); // 用户组表
+    auto file_list = std::move(loaded_file_list);     // 文件表
+    std::mutex file_mtx;                              // 文件表锁
     // 2. 注册请求处理函数
     server.Get("/whoami", [&accounts](const httplib::Request& req, httplib::Response& res) {
         std::string group;
@@ -146,7 +157,7 @@ int main() {
         res.set_content(group, "text/plain");
     });
 
-    server.Get("/files", [&accounts, &file_list](const httplib::Request& req, httplib::Response& res) {
+    server.Get("/files", [&accounts, &file_list, &file_mtx](const httplib::Request& req, httplib::Response& res) {
         std::string group;
         std::size_t auth_header_vaule_count = req.get_header_value_count("Authorization");
         if (auth_header_vaule_count == 0) {
@@ -158,7 +169,9 @@ int main() {
             res.set_content("authentication required", "text/plain");
             return;
         }
+        std::unique_lock<std::mutex> lock(file_mtx);
         std::vector<FileRecord> group_file_list = get_group_file_list(file_list, group);
+        lock.unlock();
         std::string request_group_file_list;
         for (const auto file : group_file_list) {
             std::string tmp = std::to_string(file.file_id) + " " + file.display_name + " ";
@@ -168,40 +181,43 @@ int main() {
         res.set_content(request_group_file_list, "text/plain");
     });
 
-    server.Get("/file/([0-9]+)", [&accounts, &file_list](const httplib::Request& req, httplib::Response& res) {
-        std::string group;
-        std::size_t auth_header_vaule_count = req.get_header_value_count("Authorization");
-        if (auth_header_vaule_count == 0) {
-            group = "PUBLIC";
-        } else if (auth_header_vaule_count > 1 ||
-                   !authenticate_basic(req.get_header_value("Authorization"), accounts, group)) {
-            res.status = 401;
-            res.set_header("WWW-Authenticate", "Basic realm=\"netpanel\"");
-            res.set_content("authentication required", "text/plain");
-            return;
-        }
-        const std::string id_text = req.matches[1].str();
-        std::size_t file_id = 0;
-        if (!string_to_size_t(id_text, file_id)) {
-            res.status = 400;
-            return;
-        }
-        auto it = file_list.find(file_id);
-        if (it == file_list.end()) {
-            res.status = 404;
-            return;
-        }
-        if (it->second.owner_group != group && it->second.owner_group != "PUBLIC") {
-            res.status = 404;
-            return;
-        }
-        res.status = 200;
-        res.set_header("Content-Disposition", "attachment; filename=\"" + it->second.display_name + "\"");
-        res.set_file_content(it->second.storage_path, "application/octet-stream");
-    });
+    server.Get("/file/([0-9]+)",
+               [&accounts, &file_list, &file_mtx](const httplib::Request& req, httplib::Response& res) {
+                   std::string group;
+                   std::size_t auth_header_vaule_count = req.get_header_value_count("Authorization");
+                   if (auth_header_vaule_count == 0) {
+                       group = "PUBLIC";
+                   } else if (auth_header_vaule_count > 1 ||
+                              !authenticate_basic(req.get_header_value("Authorization"), accounts, group)) {
+                       res.status = 401;
+                       res.set_header("WWW-Authenticate", "Basic realm=\"netpanel\"");
+                       res.set_content("authentication required", "text/plain");
+                       return;
+                   }
+                   const std::string id_text = req.matches[1].str();
+                   std::size_t file_id = 0;
+                   if (!string_to_size_t(id_text, file_id)) {
+                       res.status = 400;
+                       return;
+                   }
+                   std::unique_lock<std::mutex> lock(file_mtx);
+                   auto it = file_list.find(file_id);
+                   if (it == file_list.end()) {
+                       res.status = 404;
+                       return;
+                   }
+                   if (it->second.owner_group != group && it->second.owner_group != "PUBLIC") {
+                       res.status = 404;
+                       return;
+                   }
+                   lock.unlock();
+                   res.status = 200;
+                   res.set_header("Content-Disposition", "attachment; filename=\"" + it->second.display_name + "\"");
+                   res.set_file_content(it->second.storage_path, "application/octet-stream");
+               });
 
     server.Post("/files",
-                [&accounts, &file_list, &file_id_mtx, last_file_id, upload_dir](
+                [&accounts, &file_list, &file_id_mtx, &last_file_id, &file_mtx, upload_dir](
                     const httplib::Request& req, httplib::Response& res, const httplib::ContentReader& reader) {
                     std::string group;
                     if (req.get_header_value_count("Authorization") != 1 ||
@@ -240,10 +256,15 @@ int main() {
                         return;
                     }
 
-                    if (!publish_upload(id, name, group, temp_path, upload_dir)) {
+                    FileRecord upload_file_record;
+                    if (!publish_upload(id, name, group, temp_path, upload_dir, upload_file_record)) {
                         std::remove(temp_path.c_str());
                         res.status = 500;
                         return;
+                    }
+                    {
+                        std::lock_guard<std::mutex> lock(file_mtx);
+                        file_list.emplace(id, upload_file_record);
                     }
                     res.status = 201;
                     res.set_content(std::to_string(id), "text/plain");

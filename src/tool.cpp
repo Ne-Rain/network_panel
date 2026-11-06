@@ -39,6 +39,7 @@ bool decode_base64(const std::string& encoded, std::string& decoded) {
 }
 
 bool string_to_size_t(const std::string& s, std::size_t& value) {
+    value = 0;
     constexpr size_t max = std::numeric_limits<std::size_t>::max();
     for (std::size_t i = 0; i < s.size(); ++i) {
         char c = s[i];
