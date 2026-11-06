@@ -1,20 +1,19 @@
+#define CPPHTTPLIB_OPENSSL_SUPPORT
+#include "auth.hpp"
 #include "file_catalog.hpp"
+#include "httplib.h"
 #include "tool.h"
 #include <cstddef>
 #include <cstdlib>
+#include <exception>
 #include <fstream>
 #include <ios>
+#include <iostream>
 #include <mutex>
 #include <stdexcept>
 #include <string>
-#include <vector>
-#define CPPHTTPLIB_OPENSSL_SUPPORT
-
-#include "auth.hpp"
-#include "httplib.h"
-#include <exception>
-#include <iostream>
 #include <unordered_map>
+#include <vector>
 
 static const std::regex valid_name(R"([A-Za-z0-9][A-Za-z0-9._-]{0,127})");
 static const std::string config_last_file_id = "./config/last_file_id.txt";
@@ -72,9 +71,13 @@ std::string make_upload_tmp_path(const std::string& upload_dir, std::size_t id) 
 bool publish_upload(std::size_t id, std::string name, std::string group, std::string temp_path, std::string upload_dir,
                     FileRecord& upload_file_record) {
     std::string path = upload_dir + std::to_string(id);
-    if (std::rename(temp_path.c_str(), path.c_str()) != 0) {
+    if (::link(temp_path.c_str(), path.c_str()) != 0) { // 新增path硬链接指向实际文件，如果path存在则失败（防覆盖）
+        const int error = errno;
         std::remove(temp_path.c_str());
-        throw std::runtime_error("Failed to save file");
+        throw std::system_error(error, std::generic_category(), "Failed to publish upload");
+    }
+    if (::unlink(temp_path.c_str()) != 0) {
+        std::cerr << "Failed to remove temporary upload: " << temp_path << '\n';
     }
     FileRecord file_record{id, name, group, path};
     std::ofstream file_list_out("./config/files.txt", std::ios::app);
@@ -136,6 +139,14 @@ int main() {
     } catch (const std::exception& e) {
         std::cerr << "Failed to load accounts or files: " << e.what() << '\n';
         return 1;
+    }
+
+    // 保证 配置表中最大文件编号 >= 实际文件表的最大编号
+    for (const auto& entry : loaded_file_list) {
+        if (entry.first > last_file_id) {
+            std::cerr << "last_file_id.txt is behind the file catalog\n";
+            return 1;
+        }
     }
 
     const auto accounts = std::move(loaded_accounts); // 用户组表
