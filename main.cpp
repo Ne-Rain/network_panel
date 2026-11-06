@@ -68,33 +68,69 @@ std::string make_tmp_path(const std::string& tmp_dir, std::size_t id) {
     return std::string(path.data());
 }
 
-bool publish_upload(std::size_t id, std::string name, std::string group, std::string temp_path, std::string upload_dir,
-                    FileRecord& upload_file_record) {
-    std::string path = upload_dir + std::to_string(id);
-    if (::link(temp_path.c_str(), path.c_str()) != 0) { // 新增path硬链接指向实际文件，如果path存在则失败（防覆盖）
-        const int error = errno;
+void publish_upload(std::size_t id, const std::string& name, const std::string& group, const std::string& temp_path,
+                    const std::string& upload_dir, std::unordered_map<std::size_t, FileRecord>& file_list,
+                    std::mutex& file_mtx) {
+    // 写完完整的临时表 → 创建正式文件 → 替换磁盘表 → 更新内存表
+    std::lock_guard<std::mutex> lock(file_mtx);
+
+    std::string final_path; // 上传文件存储路径
+    std::string catalog_tmp; // 临时磁盘文件表路径
+    bool final_created = false;
+
+    try {
+        final_path = upload_dir + std::to_string(id);
+
+        // 准备完整的新文件表，当前内存表仍可保留
+        auto next_files = file_list;
+        if (!next_files.emplace(id, FileRecord{id, name, group, final_path}).second) {
+            throw std::runtime_error("Duplicate file ID");
+        }
+
+        catalog_tmp = make_tmp_path("./config/", 0);
+        std::ofstream out(catalog_tmp, std::ios::trunc);
+        if (!out) {
+            throw std::runtime_error("Failed to open temporary file catalog");
+        }
+
+        // 把内存表写入新磁盘文件表
+        for (const auto& entry : next_files) {
+            const auto& file = entry.second;
+            out << file.file_id << ' ' << file.display_name << ' ' << file.owner_group << ' ' << file.storage_path
+                << '\n';
+        }
+        out.close();
+        if (!out) {
+            throw std::runtime_error("Failed to write temporary file catalog");
+        }
+
+        // link 保留已有目标文件。只有成功时才标记为本次创建
+        if (::link(temp_path.c_str(), final_path.c_str()) != 0) {
+            const int error = errno;
+            throw std::system_error(error, std::generic_category(), "Failed to publish upload");
+        }
+        final_created = true;
+
+        // 替换磁盘文件表
+        if (std::rename(catalog_tmp.c_str(), config_files.c_str()) != 0) {
+            const int error = errno;
+            throw std::system_error(error, std::generic_category(), "Failed to replace file catalog");
+        }
+
+        // 更新内存文件表
+        file_list.swap(next_files);
+    } catch (...) {
+        if (!catalog_tmp.empty()) {
+            std::remove(catalog_tmp.c_str());
+        }
+        if (final_created) {
+            std::remove(final_path.c_str());
+        }
         std::remove(temp_path.c_str());
-        throw std::system_error(error, std::generic_category(), "Failed to publish upload");
+        throw;
     }
-    if (::unlink(temp_path.c_str()) != 0) {
-        std::cerr << "Failed to remove temporary upload: " << temp_path << '\n';
-    }
-    std::string tmp_path = make_tmp_path("./config/", 0);
-    std::ofstream file_list_out(tmp_path, std::ios::app);
-    if (!file_list_out) {
-        throw std::runtime_error("Failed to open file_list");
-    }
-    file_list_out << id << ' ' << name << ' ' << group << ' ' << path << '\n';
-    file_list_out.close();
-    if (!file_list_out || std::rename(tmp_path.c_str(), config_files.c_str()) != 0) {
-        std::remove(tmp_path.c_str());
-        throw std::runtime_error("Failed to save file_id");
-    }
-    upload_file_record.file_id = id;
-    upload_file_record.display_name = name;
-    upload_file_record.owner_group = group;
-    upload_file_record.storage_path = path;
-    return true;
+
+    std::remove(temp_path.c_str());
 }
 
 int main() {
@@ -267,17 +303,8 @@ int main() {
                         }
                         return;
                     }
+                    publish_upload(id, name, group, temp_path, upload_dir, file_list, file_mtx);
 
-                    FileRecord upload_file_record;
-                    if (!publish_upload(id, name, group, temp_path, upload_dir, upload_file_record)) {
-                        std::remove(temp_path.c_str());
-                        res.status = 500;
-                        return;
-                    }
-                    {
-                        std::lock_guard<std::mutex> lock(file_mtx);
-                        file_list.emplace(id, upload_file_record);
-                    }
                     res.status = 201;
                     res.set_content(std::to_string(id), "text/plain");
                 });
