@@ -52,7 +52,7 @@ std::size_t reserve_file_id(std::mutex& id_mtx, std::size_t& last_file_id) {
     mkstemp()生成一个唯一的临时文件名，并在同一步创建文件
 */
 std::string make_upload_tmp_path(const std::string& upload_dir, std::size_t id) {
-    const std::string pattern = upload_dir + "./upload-" + std::to_string(id) + "-XXXXXX";
+    const std::string pattern = upload_dir + "upload-" + std::to_string(id) + "-XXXXXX";
 
     // mkstemp 会原地替换末尾的六个 X，需要可写的字符数组
     std::vector<char> path(pattern.begin(), pattern.end());
@@ -71,7 +71,7 @@ std::string make_upload_tmp_path(const std::string& upload_dir, std::size_t id) 
 
 bool publish_upload(std::size_t id, std::string name, std::string group, std::string temp_path, std::string upload_dir,
                     FileRecord& upload_file_record) {
-    std::string path = upload_dir + "/" + std::to_string(id);
+    std::string path = upload_dir + std::to_string(id);
     if (std::rename(temp_path.c_str(), path.c_str()) != 0) {
         std::remove(temp_path.c_str());
         throw std::runtime_error("Failed to save file");
@@ -103,30 +103,29 @@ int main() {
     }
 
     std::mutex file_id_mtx;
-    std::size_t last_file_id; // 最后的文件编号
-    std::string upload_dir;   // 文件上传路径
+    std::size_t last_file_id = 0; // 最后的文件编号
+    std::string upload_dir;       // 文件上传路径
     std::ifstream last_file_id_in(config_last_file_id);
     if (!last_file_id_in) {
         throw std::runtime_error("last_file_id_file open failed");
     }
     std::string line;
-    if (std::getline(last_file_id_in, line)) {
-        std::size_t file_id;
-        if (string_to_size_t(line, file_id)) {
-            std::lock_guard<std::mutex> lock(file_id_mtx);
-            last_file_id = file_id;
-        } else {
-            std::cerr << "Failed to load last_file_id\n";
-            return 1;
-        }
+    if (!std::getline(last_file_id_in, line) || line.empty() || !string_to_size_t(line, last_file_id)) {
+        std::cerr << "Invalid last_file_id.txt\n";
+        return 1;
     }
+
     std::ifstream upload_dir_in(config_upload_dir);
     if (!upload_dir_in) {
         throw std::runtime_error("upload_dir_file open failed");
     }
     std::string tmp_line;
-    if (std::getline(upload_dir_in, tmp_line)) {
-        upload_dir = tmp_line;
+    if (!std::getline(upload_dir_in, upload_dir) || upload_dir.empty()) {
+        std::cerr << "Invalid upload directory\n";
+        return 1;
+    }
+    if (upload_dir.back() != '/') {
+        upload_dir += '/';
     }
 
     std::unordered_map<std::string, GroupAccount> loaded_accounts;
@@ -206,14 +205,15 @@ int main() {
                        res.status = 404;
                        return;
                    }
-                   if (it->second.owner_group != group && it->second.owner_group != "PUBLIC") {
+                   const FileRecord record = it->second;
+                   lock.unlock();
+                   if (record.owner_group != group && record.owner_group != "PUBLIC") {
                        res.status = 404;
                        return;
                    }
-                   lock.unlock();
                    res.status = 200;
-                   res.set_header("Content-Disposition", "attachment; filename=\"" + it->second.display_name + "\"");
-                   res.set_file_content(it->second.storage_path, "application/octet-stream");
+                   res.set_header("Content-Disposition", "attachment; filename=\"" + record.display_name + "\"");
+                   res.set_file_content(record.storage_path, "application/octet-stream");
                });
 
     server.Post("/files",
