@@ -50,20 +50,20 @@ std::size_t reserve_file_id(std::mutex& id_mtx, std::size_t& last_file_id) {
 /**创建临时上传路径
     mkstemp()生成一个唯一的临时文件名，并在同一步创建文件
 */
-std::string make_upload_tmp_path(const std::string& upload_dir, std::size_t id) {
-    const std::string pattern = upload_dir + "upload-" + std::to_string(id) + "-XXXXXX";
+std::string make_tmp_path(const std::string& tmp_dir, std::size_t id) {
+    const std::string pattern = tmp_dir + "upload-" + std::to_string(id) + "-XXXXXX";
 
     // mkstemp 会原地替换末尾的六个 X，需要可写的字符数组
     std::vector<char> path(pattern.begin(), pattern.end());
     path.push_back('\0');
     const int fd = ::mkstemp(path.data());
     if (fd == -1) {
-        throw std::system_error(errno, std::generic_category(), "Failed to create temp upload_dir");
+        throw std::system_error(errno, std::generic_category(), "Failed to create temp dir");
     }
     if (::close(fd) == -1) {
         const int error = errno;
         ::unlink(path.data());
-        throw std::system_error(error, std::generic_category(), "Failed to close temp upload_dir");
+        throw std::system_error(error, std::generic_category(), "Failed to close temp dir");
     }
     return std::string(path.data());
 }
@@ -79,15 +79,16 @@ bool publish_upload(std::size_t id, std::string name, std::string group, std::st
     if (::unlink(temp_path.c_str()) != 0) {
         std::cerr << "Failed to remove temporary upload: " << temp_path << '\n';
     }
-    FileRecord file_record{id, name, group, path};
-    std::ofstream file_list_out("./config/files.txt", std::ios::app);
+    std::string tmp_path = make_tmp_path("./config/", 0);
+    std::ofstream file_list_out(tmp_path, std::ios::app);
     if (!file_list_out) {
         throw std::runtime_error("Failed to open file_list");
     }
     file_list_out << id << ' ' << name << ' ' << group << ' ' << path << '\n';
     file_list_out.close();
-    if (!file_list_out) {
-        throw std::runtime_error("Failed to writer file_list");
+    if (!file_list_out || std::rename(tmp_path.c_str(), config_files.c_str()) != 0) {
+        std::remove(tmp_path.c_str());
+        throw std::runtime_error("Failed to save file_id");
     }
     upload_file_record.file_id = id;
     upload_file_record.display_name = name;
@@ -247,7 +248,7 @@ int main() {
                         return;
                     }
                     const auto id = reserve_file_id(file_id_mtx, last_file_id);
-                    const auto temp_path = make_upload_tmp_path(upload_dir, id);
+                    const auto temp_path = make_tmp_path(upload_dir, id);
 
                     std::ofstream out(temp_path, std::ios::binary);
                     if (!out) {
