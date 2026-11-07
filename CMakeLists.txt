@@ -25,15 +25,32 @@ target_link_libraries(
     OpenSSL::Crypto
     Threads::Threads
 )
-
 target_include_directories(
     app
     PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+add_executable(netpanel_client client/client_main.cpp)
+
+target_include_directories(netpanel_client PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+
+target_link_libraries(netpanel_client PRIVATE
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    Threads::Threads
+)
+
 set_target_properties(
     app
+    PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/output
+)
+
+set_target_properties(
+    netpanel_client
     PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/output
 )

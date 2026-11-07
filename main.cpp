@@ -15,6 +15,9 @@
 #include <unordered_map>
 #include <vector>
 
+static const std::string host = "0.0.0.0";
+static const int port = 8843;
+
 static const std::regex valid_name(R"([A-Za-z0-9][A-Za-z0-9._-]{0,127})");
 static const std::string config_last_file_id = "./config/last_file_id.txt";
 static const std::string config_files = "./config/files.txt";
@@ -309,7 +312,7 @@ int main() {
                     res.set_content(std::to_string(id), "text/plain");
                 });
 
-    if (!server.listen("127.0.0.1", 8443)) {
+    if (!server.listen(host, port)) {
         std::cerr << "Failed to listen\n";
         return 1;
     }
