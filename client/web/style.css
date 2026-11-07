@@ -1,0 +1,206 @@
+:root {
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    color: #152238;
+    background: #f4f7fb;
+    font-synthesis: none;
+    --accent: #194fb0;
+    --muted: #4f6078;
+    --border: #dce4f0;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+body {
+    min-width: 0;
+    min-height: 100vh;
+    margin: 0;
+}
+
+.app-header {
+    border-bottom: 1px solid var(--border);
+    background: #fff;
+}
+
+.header-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    max-width: 1120px;
+    min-height: 70px;
+    margin: 0 auto;
+    padding: 12px 28px;
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 20px;
+    font-weight: 720;
+}
+
+.brand-icon { color: var(--accent); }
+.header-caption { color: var(--muted); font-size: 14px; }
+
+.workspace {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: clamp(28px, 8vh, 88px) 28px 48px;
+}
+
+.card {
+    margin: 0 auto;
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    background: #fff;
+    box-shadow: 0 12px 36px rgb(30 60 106 / 8%);
+}
+
+.login-card {
+    max-width: 420px;
+    padding: clamp(24px, 6vw, 36px);
+}
+
+.card-intro h1 {
+    margin: 0;
+    font-size: clamp(25px, 5vw, 32px);
+    line-height: 1.25;
+}
+
+.card-intro p {
+    margin: 10px 0 0;
+    color: var(--muted);
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+}
+
+#login-form { margin-top: 30px; }
+.field + .field { margin-top: 18px; }
+
+.field label {
+    display: block;
+    margin-bottom: 7px;
+    font-size: 14px;
+    font-weight: 650;
+}
+
+.field input {
+    width: 100%;
+    min-height: 46px;
+    padding: 10px 13px;
+    border: 1px solid #a9b7cb;
+    border-radius: 8px;
+    background: #fff;
+    color: inherit;
+    font: inherit;
+}
+
+.field input::placeholder { color: #596981; }
+.field input:focus { border-color: var(--accent); }
+
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+}
+
+.primary-button {
+    width: 100%;
+    min-height: 46px;
+    margin-top: 24px;
+    padding: 9px 16px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #fff;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 650;
+}
+
+.primary-button:hover:not(:disabled) { background: #133e8c; }
+.primary-button:disabled { cursor: wait; background: #526e9e; }
+
+.message {
+    margin: 16px 0 0;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.error-message {
+    padding: 10px 12px;
+    border: 1px solid #f2c5bf;
+    border-radius: 8px;
+    background: #fff3f1;
+    color: #9a241d;
+}
+
+.login-status { color: var(--muted); }
+
+.files-card { max-width: 900px; overflow: hidden; }
+
+.files-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 26px 28px;
+}
+
+.count {
+    flex: 0 0 auto;
+    padding: 5px 11px;
+    border-radius: 999px;
+    background: #eaf1ff;
+    color: #173f85;
+    font-size: 14px;
+}
+
+.table-container { overflow-x: auto; }
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+}
+
+thead { background: #f1f5fb; }
+
+th, td {
+    padding: 13px 28px;
+    border-top: 1px solid var(--border);
+    line-height: 1.45;
+}
+
+th { color: #435671; font-size: 14px; }
+th:first-child { width: 26%; }
+td:first-child { color: var(--muted); font-variant-numeric: tabular-nums; }
+td { overflow-wrap: anywhere; }
+tbody tr:nth-child(even) { background: #f9fbfe; }
+
+.empty-state {
+    padding: 42px 20px 50px;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    text-align: center;
+}
+
+.empty-state svg { color: var(--accent); }
+.empty-state h2 { margin: 10px 0 6px; color: #152238; font-size: 18px; }
+.empty-state p { margin: 0; line-height: 1.5; }
+
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+    .header-inner, .workspace { padding-right: 16px; padding-left: 16px; }
+    .files-header, th, td { padding-right: 16px; padding-left: 16px; }
+}
