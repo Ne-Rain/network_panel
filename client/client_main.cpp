@@ -15,7 +15,7 @@ using SessionClock = std::chrono::steady_clock;
 struct Session {
     std::string username;
     std::string password;
-    std::string group;
+    std::string group = "PUBLIC";
     SessionClock::time_point expires_at;
 };
 static std::unordered_map<std::string, Session> sessions;
@@ -38,8 +38,9 @@ static std::string make_session_id() {
     return id;
 }
 
+enum class SessionState { Missing, Invalid, Valid };
 // 获取当前会话Cookie
-static bool load_session(const httplib::Request& req, Session& out) {
+static SessionState load_session(const httplib::Request& req, Session& out) {
     std::istringstream cookies(req.get_header_value("Cookie"));
     const std::string prefix = "netpanel_session=";
     std::string item;
@@ -53,18 +54,24 @@ static bool load_session(const httplib::Request& req, Session& out) {
         const auto id = item.substr(start + prefix.size());
         std::lock_guard<std::mutex> lock(sessions_mtx);
         const auto it = sessions.find(id);
+
         if (it == sessions.end()) {
-            return false;
+            return SessionState::Invalid;
         }
         if (it->second.expires_at <= SessionClock::now()) {
             sessions.erase(it);
-            return false;
+            return SessionState::Invalid;
         }
 
         out = it->second;
-        return true;
+        return SessionState::Valid;
     }
-    return false;
+
+    return SessionState::Missing;
+}
+
+static void clear_session_cookie(httplib::Response& res) {
+    res.set_header("Set-Cookie", "netpanel_session=; Path=/api; HttpOnly; SameSite=Strict; Max-Age=0");
 }
 
 static void append_json_string(std::string& out, const std::string& value) {
@@ -99,6 +106,12 @@ static void handle_login(const httplib::Request& req, httplib::Response& res) {
     client.set_ca_cert_path(ca_path);
     client.set_basic_auth(username, password);
 
+    std::string group = "PUBLIC";
+    auto who = client.Get("/whoami");
+    if (who->status != 200) {
+        group = who->body;
+    }
+
     auto result = client.Get("/files");
 
     if (!result) {
@@ -121,13 +134,14 @@ static void handle_login(const httplib::Request& req, httplib::Response& res) {
     {
         std::lock_guard<std::mutex> lock(sessions_mtx);
         const auto expires_at = SessionClock::now() + std::chrono::hours(1);
-        if (!sessions.emplace(id, Session{username, password, result->body, expires_at}).second) {
+        if (!sessions.emplace(id, Session{username, password, group, expires_at}).second) {
             res.status = 500;
             return;
         }
     }
+    std::string return_res = "{" + username + "," + group + "," + res.body + "}";
     res.set_header("Set-Cookie", "netpanel_session=" + id + "; Path=/api; HttpOnly; SameSite=Strict; Max-Age=3600");
-    res.set_content(result->body, "text/plain");
+    res.set_content(return_res, "text/plain");
 }
 
 // 文件列表接口
@@ -135,8 +149,11 @@ static void handle_files(const httplib::Request& req, httplib::Response& res) {
     httplib::SSLClient client(host, port);
     client.set_ca_cert_path(ca_path);
     Session session;
-    if (load_session(req, session)) {
+    const auto state = load_session(req, session);
+    if (state == SessionState::Valid) {
         client.set_basic_auth(session.username, session.password);
+    } else if (state == SessionState::Invalid) {
+        clear_session_cookie(res);
     }
 
     auto result = client.Get("/files");
@@ -154,8 +171,12 @@ static void handle_files(const httplib::Request& req, httplib::Response& res) {
         return;
     }
     std::istringstream input(result->body);
+    std::string username = session.username.empty() ? "" : session.username;
     std::string json = "[";
-    bool first = true;
+    json += "{\"username\":";
+    append_json_string(json, username);
+    json += ",\"group\":";
+    append_json_string(json, session.group);
     std::string id;
     std::string name;
     while (input >> id) {
@@ -163,11 +184,7 @@ static void handle_files(const httplib::Request& req, httplib::Response& res) {
             res.status = 502;
             return;
         }
-        if (!first) {
-            json += ',';
-        }
-        first = false;
-        json += "{\"id\":";
+        json += ",\"id\":";
         append_json_string(json, id);
         json += ",\"name\":";
         append_json_string(json, name);
@@ -183,10 +200,13 @@ static void handle_download(const httplib::Request& req, httplib::Response& res)
     httplib::SSLClient client(host, port);
     client.set_ca_cert_path(ca_path);
     Session session;
-    if (load_session(req, session)) {
+    const auto state = load_session(req, session);
+    if (state == SessionState::Valid) {
         client.set_basic_auth(session.username, session.password);
+    } else if (state == SessionState::Invalid) {
+        clear_session_cookie(res);
     }
-    
+
     auto result = client.Get("/file/" + id);
     if (!result) {
         res.status = 502;
@@ -217,10 +237,16 @@ static void handle_upload(const httplib::Request& req, httplib::Response& res) {
     httplib::SSLClient client(host, port);
     client.set_ca_cert_path(ca_path);
     Session session;
-    if (!load_session(req, session)) {
+    const auto state = load_session(req, session);
+
+    if (state != SessionState::Valid) {
+        if (state == SessionState::Invalid) {
+            clear_session_cookie(res);
+        }
         res.status = 401;
         return;
     }
+
     client.set_basic_auth(session.username, session.password);
     auto result = client.Post("/files?name=" + filename, req.body, "application/octet-stream");
     if (!result) {
