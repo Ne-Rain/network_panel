@@ -93,6 +93,43 @@ static void append_json_string(std::string& out, const std::string& value) {
     out += '"';
 }
 
+static bool make_file_listing(const std::string& body, const Session* session, std::string& json) {
+    json = "{\"username\":";
+    if (session) {
+        append_json_string(json, session->username);
+        json += ",\"group\":";
+        append_json_string(json, session->group);
+    } else {
+        json += "null,\"group\":null";
+    }
+    json += ",\"files\":[";
+
+    std::istringstream input(body);
+    std::string id;
+    std::string name;
+    bool first = true;
+
+    while (input >> id) {
+        if (!(input >> name) || id.find_first_not_of("0123456789") != std::string::npos) {
+            return false;
+        }
+
+        if (!first) {
+            json += ',';
+        }
+        first = false;
+
+        json += "{\"id\":";
+        append_json_string(json, id);
+        json += ",\"name\":";
+        append_json_string(json, name);
+        json += '}';
+    }
+
+    json += "]}";
+    return true;
+}
+
 // 登录接口
 static void handle_login(const httplib::Request& req, httplib::Response& res) {
     const auto username = req.get_param_value("username");
@@ -108,7 +145,11 @@ static void handle_login(const httplib::Request& req, httplib::Response& res) {
 
     std::string group = "PUBLIC";
     auto who = client.Get("/whoami");
-    if (who->status != 200) {
+    if (!who) {
+        res.status = 502;
+        return;
+    }
+    if (who->status == 200) {
         group = who->body;
     }
 
@@ -131,17 +172,23 @@ static void handle_login(const httplib::Request& req, httplib::Response& res) {
         res.status = 500;
         return;
     }
+    const auto expires_at = SessionClock::now() + std::chrono::hours(1);
+    const Session session{username, password, group, expires_at};
+
+    std::string json;
+    if (!make_file_listing(result->body, &session, json)) {
+        res.status = 502;
+        return;
+    }
     {
         std::lock_guard<std::mutex> lock(sessions_mtx);
-        const auto expires_at = SessionClock::now() + std::chrono::hours(1);
-        if (!sessions.emplace(id, Session{username, password, group, expires_at}).second) {
+        if (!sessions.emplace(id, session).second) {
             res.status = 500;
             return;
         }
     }
-    std::string return_res = "{" + username + "," + group + "," + res.body + "}";
     res.set_header("Set-Cookie", "netpanel_session=" + id + "; Path=/api; HttpOnly; SameSite=Strict; Max-Age=3600");
-    res.set_content(return_res, "text/plain");
+    res.set_content(json, "text/plain");
 }
 
 // 文件列表接口
@@ -170,27 +217,14 @@ static void handle_files(const httplib::Request& req, httplib::Response& res) {
         res.status = 502;
         return;
     }
-    std::istringstream input(result->body);
-    std::string username = session.username.empty() ? "" : session.username;
-    std::string json = "[";
-    json += "{\"username\":";
-    append_json_string(json, username);
-    json += ",\"group\":";
-    append_json_string(json, session.group);
-    std::string id;
-    std::string name;
-    while (input >> id) {
-        if (!(input >> name) || id.find_first_not_of("0123456789") != std::string::npos) {
-            res.status = 502;
-            return;
-        }
-        json += ",\"id\":";
-        append_json_string(json, id);
-        json += ",\"name\":";
-        append_json_string(json, name);
-        json += '}';
+    const Session* identity = state == SessionState::Valid ? &session : nullptr;
+
+    std::string json;
+    if (!make_file_listing(result->body, identity, json)) {
+        res.status = 502;
+        return;
     }
-    json += ']';
+
     res.set_content(json, "application/json");
 }
 
