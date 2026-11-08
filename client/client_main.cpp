@@ -1,3 +1,4 @@
+#include <sstream>
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include <chrono>
 #include <openssl/rand.h>
@@ -18,6 +19,8 @@ struct Session {
 };
 static std::unordered_map<std::string, Session> sessions;
 static std::mutex sessions_mtx;
+
+// 使用RAND_bytes为会话生成唯一Cookie编号
 static std::string make_session_id() {
     unsigned char bytes[32];
     if (RAND_bytes(bytes, sizeof(bytes)) != 1) {
@@ -34,6 +37,7 @@ static std::string make_session_id() {
     return id;
 }
 
+// 获取当前会话Cookie
 static bool load_session(const httplib::Request& req, Session& out) {
     std::istringstream cookies(req.get_header_value("Cookie"));
     const std::string prefix = "netpanel_session=";
@@ -62,6 +66,25 @@ static bool load_session(const httplib::Request& req, Session& out) {
     return false;
 }
 
+static void append_json_string(std::string& out, const std::string& value){
+    constexpr char hex[] = "0123456789abcdef";
+    out += '"';
+    for(char ch : value){
+        const auto byte = static_cast<unsigned char>(ch);
+        if(byte < 0x20){
+            out += "\\u00";
+            out += hex[byte >> 4];
+            out += hex[byte & 0x0f];
+        }else {
+            if(ch == '"' || ch == '\\'){
+                out += '\\';
+            }
+            out += ch;
+        }
+    }
+    out += '"';
+}
+
 // 登录接口
 static void handle_login(const httplib::Request& req, httplib::Response& res) {
     const auto username = req.get_param_value("username");
@@ -70,21 +93,6 @@ static void handle_login(const httplib::Request& req, httplib::Response& res) {
         res.status = 400;
         return;
     }
-
-    const auto id = make_session_id();
-    if (id.empty()) {
-        res.status = 500;
-        return;
-    }
-    {
-        std::lock_guard<std::mutex> lock(sessions_mtx);
-        const auto expires_at = SessionClock::now() + std::chrono::hours(1);
-        if (!sessions.emplace(id, Session{username, password, expires_at}).second) {
-            res.status = 500;
-            return;
-        }
-    }
-    res.set_header("Set-Cookie", "netpanel_session=" + id + "; Path=/api; HttpOnly; SameSite=Strict; Max-Age=3600");
 
     httplib::SSLClient client(host, port);
     client.set_ca_cert_path(ca_path);
@@ -104,6 +112,20 @@ static void handle_login(const httplib::Request& req, httplib::Response& res) {
         res.status = 502;
         return;
     }
+    const auto id = make_session_id();
+    if (id.empty()) {
+        res.status = 500;
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(sessions_mtx);
+        const auto expires_at = SessionClock::now() + std::chrono::hours(1);
+        if (!sessions.emplace(id, Session{username, password, expires_at}).second) {
+            res.status = 500;
+            return;
+        }
+    }
+    res.set_header("Set-Cookie", "netpanel_session=" + id + "; Path=/api; HttpOnly; SameSite=Strict; Max-Age=3600");
     res.set_content(result->body, "text/plain");
 }
 
@@ -132,8 +154,28 @@ static void handle_files(const httplib::Request& req, httplib::Response& res) {
     if (result->status != 200) {
         return;
     }
-    res.status = 200;
-    res.set_content(result->body, "application/json");
+    std::istringstream input(result->body);
+    std::string json = "[";
+    bool first = true;
+    std::string id;
+    std::string name;
+    while(input >> id){
+        if(!(input >> name) || id.find_first_not_of("0123456789") != std::string::npos){
+            res.status = 502;
+            return;
+        }
+        if(!first){
+            json += ',';
+        }
+        first = false;
+        json += "{\"id\":";
+        append_json_string(json, id);
+        json += ",\"name\":";
+        append_json_string(json, name);
+        json += '}';
+    }
+    json += ']';
+    res.set_content(json, "application/json");
 }
 
 // 下载接口
@@ -196,8 +238,7 @@ static void handle_upload(const httplib::Request& req, httplib::Response& res) {
     if (result->status != 201) {
         return;
     }
-    std::string res_content = "{\"id\":\"" + result->body + "\"}";
-    res.set_content(res_content, "application/json");
+    res.set_content(result->body, "text/plain");
 }
 
 int main() {
@@ -207,9 +248,9 @@ int main() {
     }
     std::cout << "http://127.0.0.1:8080/\n";
 
-    local.Post("/api/login", handle_login);
-    local.Post("/api/files", handle_files);
-    local.Post("/api/file/([0-9]+)", handle_download);
+    local.Get("/api/login", handle_login);
+    local.Get("/api/files", handle_files);
+    local.Get("/api/file/([0-9]+)", handle_download);
     local.Post("/api/files", handle_upload);
 
     if (!local.listen("127.0.0.1", 8080)) {
