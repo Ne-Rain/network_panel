@@ -31,7 +31,7 @@ target_include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-add_executable(netpanel_client client/client_main.cpp)
+add_executable(netpanel_client client/client_main.cpp src/device_identity.cpp)
 
 target_include_directories(netpanel_client PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include"

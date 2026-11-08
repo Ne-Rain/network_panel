@@ -1,6 +1,7 @@
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include "auth.hpp"
 #include "file_catalog.hpp"
+#include "device_identity.hpp"
 #include "httplib.h"
 #include "tool.h"
 #include <cstddef>
@@ -137,9 +138,17 @@ void publish_upload(std::size_t id, const std::string& name, const std::string& 
 }
 
 int main() {
+    DeviceIdentity identity;
+    try {
+        identity = load_or_create_device_identity();
+        std::cout << "Device certificate SHA-256: " << identity.fingerprint << '\n';
+    } catch (const std::exception& error) {
+        std::cerr << "Device identity initialization failed: " << error.what() << '\n';
+        return 1;
+    }
 
     // 1. 创建https服务对象
-    httplib::SSLServer server("./certs/server.crt", "./certs/server.key");
+    httplib::SSLServer server(identity.pem_path.c_str(), identity.pem_path.c_str());
     if (!server.is_valid()) {
         std::cerr << "HTTPS 初始化失败，请检查证书和私钥\n";
         return 1;

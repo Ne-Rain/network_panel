@@ -1,15 +1,53 @@
 #include <sstream>
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include <chrono>
+#include <exception>
+#include <iostream>
+#include <memory>
 #include <openssl/rand.h>
+#include <openssl/ssl.h>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 
+#include "device_identity.hpp"
 #include "httplib.h"
 
-static const std::string host = "192.168.110.51";
-static const int port = 8843;
-static const std::string ca_path = "./certs/ca.crt";
+struct RemoteTarget {
+    std::string host;
+    int port;
+    std::string fingerprint;
+};
+
+static RemoteTarget parse_remote_target(const std::string& host, const std::string& port_text,
+                                        std::string fingerprint) {
+    if (host.empty() || port_text.empty() || port_text.find_first_not_of("0123456789") != std::string::npos) {
+        throw std::invalid_argument("expected a server host and numeric port");
+    }
+    const auto port = std::stoul(port_text);
+    if (port == 0 || port > 65535) {
+        throw std::invalid_argument("server port must be between 1 and 65535");
+    }
+    if (fingerprint.size() != 64 || fingerprint.find_first_not_of("0123456789abcdefABCDEF") != std::string::npos) {
+        throw std::invalid_argument("server fingerprint must contain 64 hexadecimal characters");
+    }
+    for (char& digit : fingerprint) {
+        if (digit >= 'A' && digit <= 'F') {
+            digit = static_cast<char>(digit - 'A' + 'a');
+        }
+    }
+    return {host, static_cast<int>(port), fingerprint};
+}
+
+static void verify_remote_peer(httplib::SSLClient& client, const std::string& expected_fingerprint) {
+    client.set_session_verifier([expected_fingerprint](httplib::tls::session_t session) {
+        using Certificate = std::unique_ptr<X509, decltype(&X509_free)>;
+        Certificate certificate(SSL_get1_peer_certificate(static_cast<SSL*>(session)), &X509_free);
+        return matches_device_certificate(certificate.get(), expected_fingerprint)
+                   ? httplib::SSLVerifierResponse::CertificateAccepted
+                   : httplib::SSLVerifierResponse::CertificateRejected;
+    });
+}
 
 using SessionClock = std::chrono::steady_clock;
 struct Session {
@@ -131,7 +169,7 @@ static bool make_file_listing(const std::string& body, const Session* session, s
 }
 
 // 登录接口
-static void handle_login(const httplib::Request& req, httplib::Response& res) {
+static void handle_login(const httplib::Request& req, httplib::Response& res, const RemoteTarget& target) {
     const auto username = req.get_param_value("username");
     const auto password = req.get_param_value("password");
     if (username.empty()) {
@@ -139,8 +177,8 @@ static void handle_login(const httplib::Request& req, httplib::Response& res) {
         return;
     }
 
-    httplib::SSLClient client(host, port);
-    client.set_ca_cert_path(ca_path);
+    httplib::SSLClient client(target.host, target.port);
+    verify_remote_peer(client, target.fingerprint);
     client.set_basic_auth(username, password);
 
     std::string group = "PUBLIC";
@@ -149,10 +187,11 @@ static void handle_login(const httplib::Request& req, httplib::Response& res) {
         res.status = 502;
         return;
     }
-    if (who->status == 200) {
-        group = who->body;
+    if (who->status != 200) {
+        res.status = 502;
+        return;
     }
-
+    group = who->body;
     auto result = client.Get("/files");
 
     if (!result) {
@@ -188,13 +227,13 @@ static void handle_login(const httplib::Request& req, httplib::Response& res) {
         }
     }
     res.set_header("Set-Cookie", "netpanel_session=" + id + "; Path=/api; HttpOnly; SameSite=Strict; Max-Age=3600");
-    res.set_content(json, "text/plain");
+    res.set_content(json, "application/json");
 }
 
 // 文件列表接口
-static void handle_files(const httplib::Request& req, httplib::Response& res) {
-    httplib::SSLClient client(host, port);
-    client.set_ca_cert_path(ca_path);
+static void handle_files(const httplib::Request& req, httplib::Response& res, const RemoteTarget& target) {
+    httplib::SSLClient client(target.host, target.port);
+    verify_remote_peer(client, target.fingerprint);
     Session session;
     const auto state = load_session(req, session);
     if (state == SessionState::Valid) {
@@ -229,10 +268,10 @@ static void handle_files(const httplib::Request& req, httplib::Response& res) {
 }
 
 // 下载接口
-static void handle_download(const httplib::Request& req, httplib::Response& res) {
+static void handle_download(const httplib::Request& req, httplib::Response& res, const RemoteTarget& target) {
     const auto id = req.matches[1].str();
-    httplib::SSLClient client(host, port);
-    client.set_ca_cert_path(ca_path);
+    httplib::SSLClient client(target.host, target.port);
+    verify_remote_peer(client, target.fingerprint);
     Session session;
     const auto state = load_session(req, session);
     if (state == SessionState::Valid) {
@@ -266,10 +305,10 @@ static void handle_download(const httplib::Request& req, httplib::Response& res)
 }
 
 // 上传接口
-static void handle_upload(const httplib::Request& req, httplib::Response& res) {
+static void handle_upload(const httplib::Request& req, httplib::Response& res, const RemoteTarget& target) {
     const auto filename = req.get_param_value("name");
-    httplib::SSLClient client(host, port);
-    client.set_ca_cert_path(ca_path);
+    httplib::SSLClient client(target.host, target.port);
+    verify_remote_peer(client, target.fingerprint);
     Session session;
     const auto state = load_session(req, session);
 
@@ -315,17 +354,35 @@ static void handle_upload(const httplib::Request& req, httplib::Response& res) {
     res.set_content(json, "application/json");
 }
 
-int main() {
+int main(int argc, char* argv[]) {
+    if (argc != 4) {
+        std::cerr << "Usage: " << argv[0] << " <server-host> <server-port> <server-sha256>\n";
+        return 1;
+    }
+
+    RemoteTarget target{};
+    try {
+        target = parse_remote_target(argv[1], argv[2], argv[3]);
+        const auto identity = load_or_create_device_identity();
+        std::cout << "Device certificate SHA-256: " << identity.fingerprint << '\n';
+    } catch (const std::exception& error) {
+        std::cerr << "Client initialization failed: " << error.what() << '\n';
+        return 1;
+    }
     httplib::Server local;
     if (!local.set_mount_point("/", "./client/web")) {
         std::cerr << "Failed to find webpage\n";
     }
     std::cout << "http://127.0.0.1:8080/\n";
 
-    local.Post("/api/login", handle_login);
-    local.Get("/api/files", handle_files);
-    local.Get("/api/files/([0-9]+)", handle_download);
-    local.Post("/api/files", handle_upload);
+    local.Post("/api/login",
+               [&target](const httplib::Request& req, httplib::Response& res) { handle_login(req, res, target); });
+    local.Get("/api/files",
+              [&target](const httplib::Request& req, httplib::Response& res) { handle_files(req, res, target); });
+    local.Get("/api/files/([0-9]+)",
+              [&target](const httplib::Request& req, httplib::Response& res) { handle_download(req, res, target); });
+    local.Post("/api/files",
+               [&target](const httplib::Request& req, httplib::Response& res) { handle_upload(req, res, target); });
 
     if (!local.listen("127.0.0.1", 8080)) {
         std::cerr << "Failed to listen 8080\n";
