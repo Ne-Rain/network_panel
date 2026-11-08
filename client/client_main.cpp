@@ -152,6 +152,7 @@ static void handle_files(const httplib::Request& req, httplib::Response& res) {
         return;
     }
     if (result->status != 200) {
+        res.status = 502;
         return;
     }
     std::istringstream input(result->body);
@@ -239,11 +240,11 @@ static void handle_upload(const httplib::Request& req, httplib::Response& res) {
         return;
     }
     std::istringstream input(result->body);
-    std::string json = "[";
+    std::string json = "";
     bool first = true;
     std::string id;
     while(input >> id){
-        if(id.find_first_not_of("0123456789") != std::string::npos){
+        if(id.empty() || id.find_first_not_of("0123456789") != std::string::npos){
             res.status = 502;
             return;
         }
@@ -255,7 +256,6 @@ static void handle_upload(const httplib::Request& req, httplib::Response& res) {
         append_json_string(json, id);
         json += '}';
     }
-    json += ']';
     res.set_content(json, "application/json");
 }
 
@@ -268,7 +268,7 @@ int main() {
 
     local.Post("/api/login", handle_login);
     local.Get("/api/files", handle_files);
-    local.Get("/api/file/([0-9]+)", handle_download);
+    local.Get("/api/files/([0-9]+)", handle_download);
     local.Post("/api/files", handle_upload);
 
     if (!local.listen("127.0.0.1", 8080)) {
