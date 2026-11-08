@@ -7,7 +7,7 @@
 
 #include "httplib.h"
 
-static const std::string host = "10.139.13.142";
+static const std::string host = "192.168.110.51";
 static const int port = 8843;
 static const std::string ca_path = "./certs/ca.crt";
 
@@ -15,6 +15,7 @@ using SessionClock = std::chrono::steady_clock;
 struct Session {
     std::string username;
     std::string password;
+    std::string group;
     SessionClock::time_point expires_at;
 };
 static std::unordered_map<std::string, Session> sessions;
@@ -66,17 +67,17 @@ static bool load_session(const httplib::Request& req, Session& out) {
     return false;
 }
 
-static void append_json_string(std::string& out, const std::string& value){
+static void append_json_string(std::string& out, const std::string& value) {
     constexpr char hex[] = "0123456789abcdef";
     out += '"';
-    for(char ch : value){
+    for (char ch : value) {
         const auto byte = static_cast<unsigned char>(ch);
-        if(byte < 0x20){
+        if (byte < 0x20) {
             out += "\\u00";
             out += hex[byte >> 4];
             out += hex[byte & 0x0f];
-        }else {
-            if(ch == '"' || ch == '\\'){
+        } else {
+            if (ch == '"' || ch == '\\') {
                 out += '\\';
             }
             out += ch;
@@ -120,7 +121,7 @@ static void handle_login(const httplib::Request& req, httplib::Response& res) {
     {
         std::lock_guard<std::mutex> lock(sessions_mtx);
         const auto expires_at = SessionClock::now() + std::chrono::hours(1);
-        if (!sessions.emplace(id, Session{username, password, expires_at}).second) {
+        if (!sessions.emplace(id, Session{username, password, result->body, expires_at}).second) {
             res.status = 500;
             return;
         }
@@ -134,12 +135,9 @@ static void handle_files(const httplib::Request& req, httplib::Response& res) {
     httplib::SSLClient client(host, port);
     client.set_ca_cert_path(ca_path);
     Session session;
-    if (!load_session(req, session)) {
-        res.status = 401;
-        return;
+    if (load_session(req, session)) {
+        client.set_basic_auth(session.username, session.password);
     }
-
-    client.set_basic_auth(session.username, session.password);
 
     auto result = client.Get("/files");
 
@@ -160,12 +158,12 @@ static void handle_files(const httplib::Request& req, httplib::Response& res) {
     bool first = true;
     std::string id;
     std::string name;
-    while(input >> id){
-        if(!(input >> name) || id.find_first_not_of("0123456789") != std::string::npos){
+    while (input >> id) {
+        if (!(input >> name) || id.find_first_not_of("0123456789") != std::string::npos) {
             res.status = 502;
             return;
         }
-        if(!first){
+        if (!first) {
             json += ',';
         }
         first = false;
@@ -185,12 +183,10 @@ static void handle_download(const httplib::Request& req, httplib::Response& res)
     httplib::SSLClient client(host, port);
     client.set_ca_cert_path(ca_path);
     Session session;
-    if (!load_session(req, session)) {
-        res.status = 401;
-        return;
+    if (load_session(req, session)) {
+        client.set_basic_auth(session.username, session.password);
     }
-
-    client.set_basic_auth(session.username, session.password);
+    
     auto result = client.Get("/file/" + id);
     if (!result) {
         res.status = 502;
@@ -243,12 +239,12 @@ static void handle_upload(const httplib::Request& req, httplib::Response& res) {
     std::string json = "";
     bool first = true;
     std::string id;
-    while(input >> id){
-        if(id.empty() || id.find_first_not_of("0123456789") != std::string::npos){
+    while (input >> id) {
+        if (id.empty() || id.find_first_not_of("0123456789") != std::string::npos) {
             res.status = 502;
             return;
         }
-        if(!first){
+        if (!first) {
             json += ',';
         }
         first = false;

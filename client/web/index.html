@@ -9,74 +9,111 @@
     <script src="./app.js" defer></script>
 </head>
 <body>
+    <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <symbol id="icon-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+        <symbol id="icon-person" viewBox="0 0 24 24"><circle cx="12" cy="7" r="3.5"/><path d="M4 21v-2a5 5 0 0 1 5-5h6a5 5 0 0 1 5 5v2z"/></symbol>
+        <symbol id="icon-upload" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></symbol>
+        <symbol id="icon-download" viewBox="0 0 24 24"><path d="M12 3v13m-5-5 5 5 5-5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></symbol>
+        <symbol id="icon-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6zM14 3v5h4M9 12h6m-6 4h6"/></symbol>
+        <symbol id="icon-archive" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6zM14 3v5h4M10 4h2m-1 3h2m-3 3h2m-1 3h2"/><circle cx="12" cy="17" r="1.5"/></symbol>
+        <symbol id="icon-eye" viewBox="0 0 24 24"><path d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="2.5"/></symbol>
+        <symbol id="icon-eye-off" viewBox="0 0 24 24"><path d="m3 3 18 18M10 6a10 10 0 0 1 2 0c6 0 10 6 10 6a17 17 0 0 1-3 3m-3 2a9 9 0 0 1-4 1C6 18 2 12 2 12a18 18 0 0 1 4-4"/></symbol>
+        <symbol id="icon-back" viewBox="0 0 24 24"><path d="M21 12H3m7-7-7 7 7 7"/></symbol>
+    </svg>
+
     <header class="app-header">
         <div class="header-inner">
             <div class="brand">
-                <svg class="brand-icon" viewBox="0 0 40 40" width="40" height="40" aria-hidden="true">
-                    <rect width="40" height="40" rx="11" fill="currentColor"/>
-                    <path d="M11 16a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H13a2 2 0 0 1-2-2z" fill="none" stroke="white" stroke-width="1.7" stroke-linejoin="round"/>
-                    <path d="M16 21h8" stroke="white" stroke-width="1.7" stroke-linecap="round"/>
-                </svg>
+                <span class="brand-mark"><svg class="icon" aria-hidden="true"><use href="#icon-folder"/></svg></span>
                 <span>NetPanel</span>
             </div>
-            <span class="header-caption">局域网文件</span>
+            <div id="file-navigation" class="file-navigation">
+                <div class="identity">
+                    <span class="avatar"><svg class="icon" aria-hidden="true"><use href="#icon-person"/></svg></span>
+                    <div class="identity-labels">
+                        <span id="account-label">游客</span>
+                        <span id="group-label" class="group-tag" hidden></span>
+                    </div>
+                </div>
+                <a id="login-link" class="button button-outline" href="#login">登录</a>
+            </div>
+            <a id="back-link" class="text-action" href="#" hidden>
+                <svg class="icon" aria-hidden="true"><use href="#icon-back"/></svg>
+                返回公共文件
+            </a>
         </div>
     </header>
 
-    <main class="workspace">
-        <section id="login-panel" class="card login-card" aria-labelledby="login-title">
-            <div class="card-intro">
-                <h1 id="login-title">登录 NetPanel</h1>
-                <p>使用网盘账号查看本组和公共文件。</p>
+    <main>
+        <section id="files-panel" class="workspace" aria-labelledby="files-title">
+            <div id="file-banner" class="file-banner">
+                <div>
+                    <h1 id="files-title" tabindex="-1">公共文件</h1>
+                    <p id="files-description">直接浏览和下载公共文件</p>
+                </div>
+                <button id="upload-button" class="button button-primary" type="button">
+                    <svg class="icon" aria-hidden="true"><use href="#icon-upload"/></svg>上传文件
+                </button>
+                <input id="upload-input" type="file" hidden>
             </div>
-
-            <form id="login-form" method="post" action="/api/login">
-                <div class="field">
-                    <label for="username">账号</label>
-                    <input id="username" name="username" type="text" placeholder="输入账号"
-                           autocomplete="username" autocapitalize="none" spellcheck="false" required>
-                </div>
-                <div class="field">
-                    <label for="password">密码</label>
-                    <input id="password" name="password" type="password" placeholder="输入密码"
-                           autocomplete="current-password" required>
-                </div>
-                <p id="login-error" class="message error-message" role="alert" hidden></p>
-                <button id="login-button" class="primary-button" type="submit">登录</button>
-                <p id="login-status" class="message login-status" role="status" hidden></p>
-            </form>
-        </section>
-
-        <section id="files-panel" class="card files-card" aria-labelledby="files-title" hidden>
-            <div class="files-header">
-                <div class="card-intro">
-                    <h1 id="files-title" tabindex="-1">文件列表</h1>
-                    <p id="account-label"></p>
-                </div>
+            <div class="file-toolbar">
                 <span id="file-count" class="count" aria-live="polite"></span>
+                <button id="refresh-button" class="text-action" type="button">刷新列表</button>
             </div>
-            <div id="table-container" class="table-container" hidden>
+            <div id="table-container" class="table-container" tabindex="0" role="region" aria-label="文件列表">
                 <table>
-                    <caption class="visually-hidden">当前账号可访问的文件</caption>
                     <thead>
                         <tr>
-                            <th scope="col">编号</th>
                             <th scope="col">文件名</th>
+                            <th scope="col">编号</th>
+                            <th scope="col">大小</th>
+                            <th scope="col">文件类型</th>
+                            <th scope="col">修改时间</th>
+                            <th scope="col">操作</th>
                         </tr>
                     </thead>
                     <tbody id="file-rows"></tbody>
                 </table>
             </div>
             <div id="empty-state" class="empty-state" hidden>
-                <svg viewBox="0 0 36 36" width="36" height="36" aria-hidden="true">
-                    <path d="M5 13a3 3 0 0 1 3-3h7l3 3h10a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
-                </svg>
                 <h2>暂无可见文件</h2>
-                <p>你已登录，当前文件列表为空。</p>
+                <p id="empty-description">当前没有可下载的公共文件。</p>
+            </div>
+            <div class="file-feedback">
+                <progress id="upload-progress" aria-label="上传进度" hidden></progress>
+                <p id="files-status" class="message" role="status" hidden></p>
+                <p id="files-error" class="message error-message" role="alert" hidden></p>
             </div>
         </section>
 
-        <noscript><p class="message error-message">请启用 JavaScript 后使用 NetPanel。</p></noscript>
+        <section id="login-panel" class="login-page" aria-labelledby="login-title" hidden>
+            <div class="login-card">
+                <h1 id="login-title">登录 NetPanel</h1>
+                <p class="login-description">登录后可访问本组文件并上传文件</p>
+                <form id="login-form" method="post" action="/api/login">
+                    <div class="field">
+                        <label for="username">账号</label>
+                        <input id="username" name="username" type="text" placeholder="输入账号"
+                               autocomplete="username" autocapitalize="none" spellcheck="false" required>
+                    </div>
+                    <div class="field">
+                        <label for="password">密码</label>
+                        <div class="password-field">
+                            <input id="password" name="password" type="password" placeholder="输入密码"
+                                   autocomplete="current-password" required>
+                            <button id="password-toggle" class="icon-button" type="button" aria-label="显示密码"
+                                    aria-pressed="false" aria-controls="password">
+                                <svg class="icon" aria-hidden="true"><use id="password-icon" href="#icon-eye"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                    <p id="login-error" class="message error-message" role="alert" hidden></p>
+                    <button id="login-button" class="button button-primary" type="submit">登录</button>
+                    <p id="login-status" class="message" role="status" hidden></p>
+                </form>
+            </div>
+        </section>
+        <noscript><p class="workspace message error-message">请启用 JavaScript 后使用 NetPanel。</p></noscript>
     </main>
 </body>
 </html>
