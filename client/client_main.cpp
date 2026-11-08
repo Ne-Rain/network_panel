@@ -180,7 +180,7 @@ static void handle_files(const httplib::Request& req, httplib::Response& res) {
 
 // 下载接口
 static void handle_download(const httplib::Request& req, httplib::Response& res) {
-    const auto id = req.get_param_value("id");
+    const auto id = req.matches[1].str();
     httplib::SSLClient client(host, port);
     client.set_ca_cert_path(ca_path);
     Session session;
@@ -238,7 +238,25 @@ static void handle_upload(const httplib::Request& req, httplib::Response& res) {
     if (result->status != 201) {
         return;
     }
-    res.set_content(result->body, "text/plain");
+    std::istringstream input(result->body);
+    std::string json = "[";
+    bool first = true;
+    std::string id;
+    while(input >> id){
+        if(id.find_first_not_of("0123456789") != std::string::npos){
+            res.status = 502;
+            return;
+        }
+        if(!first){
+            json += ',';
+        }
+        first = false;
+        json += "{\"id\":";
+        append_json_string(json, id);
+        json += '}';
+    }
+    json += ']';
+    res.set_content(json, "application/json");
 }
 
 int main() {
@@ -248,7 +266,7 @@ int main() {
     }
     std::cout << "http://127.0.0.1:8080/\n";
 
-    local.Get("/api/login", handle_login);
+    local.Post("/api/login", handle_login);
     local.Get("/api/files", handle_files);
     local.Get("/api/file/([0-9]+)", handle_download);
     local.Post("/api/files", handle_upload);
