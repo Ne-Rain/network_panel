@@ -25,7 +25,17 @@ const loginLink = document.getElementById("login-link");
 const fileNavigation = document.getElementById("file-navigation");
 const backLink = document.getElementById("back-link");
 const passwordToggle = document.getElementById("password-toggle");
-const accountKey = "netpanel.account";
+
+const discoveryPanel = document.getElementById("discovery-panel");
+const discoveryTitle = document.getElementById("discovery-title");
+const discoveryStatus = document.getElementById("discovery-status");
+const discoveryFingerprint = document.getElementById("discovery-fingerprint");
+const discoveryRetry = document.getElementById("discovery-retry");
+const discoveryTrust = document.getElementById("discovery-trust");
+
+let serverReady = false;
+let discoveryBusy = false;
+let pendingFingerprint = "";
 
 let account = null;
 let pendingList = null;
@@ -43,45 +53,28 @@ function validateFile(file) {
 }
 
 async function readListing(response) {
-    const contentType = (response.headers.get("Content-Type") || "").split(";")[0].trim().toLowerCase();
-
-    if (contentType === "application/json" || contentType.endsWith("+json")) {
-        let payload;
-        try {
-            payload = await response.json();
-        } catch {
-            throw new Error("文件列表格式不正确。");
-        }
-        const files = Array.isArray(payload) ? payload : payload?.files;
-        if (!Array.isArray(files)) {
-            throw new Error("文件列表格式不正确。");
-        }
-        return {
-            files: files.map(validateFile),
-            username: typeof payload.username === "string" ? payload.username.trim() : "",
-            group: typeof payload.group === "string" ? payload.group.trim() : "",
-        };
-    }
-
-    if (contentType && contentType !== "text/plain") {
-        throw new Error("客户端接口返回了不支持的内容。");
-    }
-
-    const text = (await response.text()).trim();
-    if (!text) {
-        return { files: [] };
-    }
-
-    const fields = text.split(/\s+/);
-    if (fields.length % 2 !== 0) {
+    let payload;
+    try {
+        payload = await response.json();
+    } catch {
         throw new Error("文件列表格式不正确。");
     }
 
-    const files = [];
-    for (let index = 0; index < fields.length; index += 2) {
-        files.push(validateFile({ id: fields[index], name: fields[index + 1] }));
+    if (!Array.isArray(payload?.files)) {
+        throw new Error("文件列表格式不正确。");
     }
-    return { files };
+
+    const { username, group } = payload;
+    const files = payload.files.map(validateFile);
+    if (username === null && group === null) {
+        return { account: null, files };
+    }
+    if (typeof username !== "string" || !username.trim() ||
+        typeof group !== "string" || !group.trim()) {
+        throw new Error("客户端接口返回的账号或组别无效。");
+    }
+
+    return { account: { username, group }, files };
 }
 
 function icon(name) {
@@ -145,34 +138,12 @@ function clearFiles() {
     emptyState.hidden = true;
 }
 
-function rememberedAccount() {
-    try {
-        const saved = JSON.parse(sessionStorage.getItem(accountKey));
-        if (typeof saved?.username === "string" && saved.username) {
-            return { username: saved.username, group: typeof saved.group === "string" ? saved.group : "" };
-        }
-    } catch {
-        // The session cookie still controls API access if browser storage is unavailable.
-    }
-    return null;
-}
-
 function setAccount(identity) {
     account = identity;
-    try {
-        if (account) {
-            sessionStorage.setItem(accountKey, JSON.stringify(account));
-        } else {
-            sessionStorage.removeItem(accountKey);
-        }
-    } catch {
-        // In-memory identity remains available for the current page.
-    }
-
     accountLabel.textContent = account?.username || "游客";
     accountLabel.title = accountLabel.textContent;
     groupLabel.hidden = !account;
-    groupLabel.textContent = account ? account.group || "组别 —" : "";
+    groupLabel.textContent = account?.group || "";
     groupLabel.title = groupLabel.textContent;
     loginLink.hidden = Boolean(account);
     uploadButton.disabled = refreshButton.disabled && Boolean(account);
@@ -190,18 +161,19 @@ function showPassword(visible) {
 }
 
 function showView(focus = false) {
-    const signingIn = location.hash === "#login" && !account;
+    const signingIn = serverReady && location.hash === "#login" && !account;
+    discoveryPanel.hidden = serverReady;
     loginPanel.hidden = !signingIn;
     backLink.hidden = !signingIn;
-    fileNavigation.hidden = signingIn;
-    filesPanel.hidden = signingIn;
+    fileNavigation.hidden = signingIn || !serverReady;
+    filesPanel.hidden = signingIn || !serverReady;
     if (!signingIn && !loginButton.disabled) {
         passwordInput.value = "";
         showPassword(false);
         loginError.hidden = true;
     }
     if (focus) {
-        (signingIn ? usernameInput : filesTitle).focus();
+        (serverReady ? (signingIn ? usernameInput : filesTitle) : discoveryTitle).focus();
     }
 }
 
@@ -215,7 +187,7 @@ passwordToggle.addEventListener("click", () => showPassword(passwordInput.type =
 
 loginForm.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (loginButton.disabled) {
+    if (!serverReady || loginButton.disabled) {
         return;
     }
 
@@ -262,8 +234,11 @@ loginForm.addEventListener("submit", async (event) => {
         }
 
         const listing = await readListing(response);
+        if (!listing.account) {
+            throw new Error("登录响应缺少账号身份。");
+        }
         pendingList?.abort();
-        setAccount({ username: listing.username || username, group: listing.group || "" });
+        setAccount(listing.account);
         loginForm.reset();
         showPassword(false);
         showFiles(listing.files);
@@ -341,12 +316,7 @@ async function refreshFiles(expiryMessage = "", startup = false) {
         if (controller.signal.aborted) {
             return false;
         }
-        const previous = startup ? rememberedAccount() : account;
-        const username = listing.username || previous?.username;
-        if (username) {
-            const group = listing.group || (previous?.username === username ? previous.group : "");
-            setAccount({ username, group });
-        }
+        setAccount(listing.account);
         showFiles(listing.files);
         if (account && location.hash === "#login") {
             history.replaceState(null, "", location.pathname + location.search);
@@ -359,7 +329,9 @@ async function refreshFiles(expiryMessage = "", startup = false) {
         }
         throw error;
     } finally {
-        pendingList = null;
+        if (pendingList === controller) {
+            pendingList = null;
+        }
     }
 }
 
@@ -377,7 +349,81 @@ async function loadFiles(startup = false) {
     }
 }
 
-refreshButton.addEventListener("click", () => loadFiles());
+function showDiscovery(message, fingerprint = "") {
+    serverReady = false;
+    pendingFingerprint = fingerprint;
+    setAccount(null);
+    clearFiles();
+    discoveryStatus.textContent = message;
+    discoveryFingerprint.textContent = fingerprint;
+    discoveryFingerprint.hidden = !fingerprint;
+    discoveryTrust.hidden = !fingerprint;
+    showView();
+}
+
+async function connectServer(confirm = false, startup = false) {
+    if (discoveryBusy) {
+        return;
+    }
+
+    discoveryBusy = true;
+    discoveryRetry.disabled = true;
+    discoveryTrust.disabled = true;
+    setFilesBusy(true);
+    if (serverReady) {
+        showFileMessage("正在查找局域网中的服务器…");
+    } else {
+        discoveryStatus.textContent = confirm ? "正在确认服务器身份…" : "正在查找局域网中的服务器…";
+    }
+
+    try {
+        const response = await fetch(confirm ? "/api/discover/trust" : "/api/discover", {
+            method: "POST",
+            mode: "same-origin",
+            ...(confirm ? { body: pendingFingerprint } : {}),
+        });
+        if (response.status === 409) {
+            showDiscovery("发现结果已变化，请重新查找服务器。");
+            return;
+        }
+        if (!response.ok) {
+            throw new Error("客户端无法完成服务器发现（HTTP " + response.status + "）。");
+        }
+        const result = await response.json();
+        if (result.state === "missing") {
+            showDiscovery("未找到服务器。请启动服务端并确认设备在同一局域网，再重新查找。");
+            return;
+        }
+        if (result.state === "multiple") {
+            showDiscovery("发现多台服务器。请只保留要连接的一台，再重新查找。");
+            return;
+        }
+        if (result.state === "untrusted" && /^[0-9a-f]{64}$/.test(result.fingerprint)) {
+            showDiscovery("发现 " + result.name + "（" + result.host + ":" + result.port +
+                "）。请与服务端本机输出的 SHA-256 指纹核对。", result.fingerprint);
+            return;
+        }
+        if (result.state !== "ready") {
+            throw new Error("客户端返回了无效的发现结果。");
+        }
+
+        serverReady = true;
+        pendingFingerprint = "";
+        showView();
+        await loadFiles(startup);
+    } catch (error) {
+        showDiscovery(error.message || "无法连接本地客户端，请重试。");
+    } finally {
+        discoveryBusy = false;
+        discoveryRetry.disabled = false;
+        discoveryTrust.disabled = false;
+        setFilesBusy(false);
+    }
+}
+
+discoveryRetry.addEventListener("click", () => connectServer());
+discoveryTrust.addEventListener("click", () => connectServer(true));
+refreshButton.addEventListener("click", () => connectServer());
 uploadButton.addEventListener("click", () => {
     if (account) {
         uploadInput.click();
@@ -462,4 +508,4 @@ uploadInput.addEventListener("change", async () => {
 });
 
 showView(location.hash === "#login");
-loadFiles(true);
+connectServer(false, true);

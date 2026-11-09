@@ -200,3 +200,21 @@ progress { width: min(100%, 320px); accent-color: var(--accent-ink); }
     .file-banner { align-items: flex-start; flex-direction: column; }
     .login-page { min-height: calc(100svh - 67px); }
 }
+
+.discovery-banner {
+    display: block;
+}
+
+#discovery-fingerprint {
+    display: block;
+    margin-top: 12px;
+    overflow-wrap: anywhere;
+    user-select: all;
+}
+
+.discovery-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 16px;
+}
