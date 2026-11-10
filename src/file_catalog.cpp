@@ -13,30 +13,24 @@
 #include <vector>
 
 static const std::unordered_map<std::string, FileType> FILE_TYPES = {
-    {"txt", FileType::File},    {"csv", FileType::File},
-    {"pdf", FileType::File},    {"pfd", FileType::File},
-    {"doc", FileType::File},    {"docx", FileType::File},
-    {"xls", FileType::File},    {"xlsx", FileType::File},
-    {"ppt", FileType::File},    {"pptx", FileType::File},
-    {"md", FileType::File},
+    {"txt", FileType::File},    {"csv", FileType::File},    {"pdf", FileType::File},
+    {"pfd", FileType::File},    {"doc", FileType::File},    {"docx", FileType::File},
+    {"xls", FileType::File},    {"xlsx", FileType::File},   {"ppt", FileType::File},
+    {"pptx", FileType::File},   {"md", FileType::File},
 
-    {"jpg", FileType::Image},   {"jpeg", FileType::Image},
-    {"png", FileType::Image},   {"gif", FileType::Image},
-    {"webp", FileType::Image},  {"bmp", FileType::Image},
+    {"jpg", FileType::Image},   {"jpeg", FileType::Image},  {"png", FileType::Image},
+    {"gif", FileType::Image},   {"webp", FileType::Image},  {"bmp", FileType::Image},
     {"svg", FileType::Image},   {"heic", FileType::Image},
 
-    {"mp4", FileType::Video},   {"mov", FileType::Video},
-    {"mkv", FileType::Video},   {"avi", FileType::Video},
-    {"webm", FileType::Video},  {"m4v", FileType::Video},
+    {"mp4", FileType::Video},   {"mov", FileType::Video},   {"mkv", FileType::Video},
+    {"avi", FileType::Video},   {"webm", FileType::Video},  {"m4v", FileType::Video},
 
-    {"mp3", FileType::Audio},   {"wav", FileType::Audio},
-    {"flac", FileType::Audio},  {"aac", FileType::Audio},
-    {"m4a", FileType::Audio},   {"ogg", FileType::Audio},
+    {"mp3", FileType::Audio},   {"wav", FileType::Audio},   {"flac", FileType::Audio},
+    {"aac", FileType::Audio},   {"m4a", FileType::Audio},   {"ogg", FileType::Audio},
     {"opus", FileType::Audio},
 
-    {"zip", FileType::Archive}, {"rar", FileType::Archive},
-    {"7z", FileType::Archive},  {"tar", FileType::Archive},
-    {"gz", FileType::Archive},  {"bz2", FileType::Archive},
+    {"zip", FileType::Archive}, {"rar", FileType::Archive}, {"7z", FileType::Archive},
+    {"tar", FileType::Archive}, {"gz", FileType::Archive},  {"bz2", FileType::Archive},
     {"xz", FileType::Archive},  {"zst", FileType::Archive},
 };
 
@@ -91,22 +85,18 @@ std::unordered_map<std::size_t, FileRecord> load_files(const std::string& path) 
         FileRecord file_record;
         std::string file_type;
         std::istringstream iss(line);
-        if (!(iss >> file_record.file_id >> std::quoted(file_record.display_name) >>
-              file_record.size_bytes >> file_type >>
-              std::quoted(file_record.uploadedAt) >> file_record.owner_group >>
-              file_record.storage_path)) {
-            throw std::runtime_error("line_id: " + std::to_string(line_id) +
-                                     " is illegal");
+        if (!(iss >> file_record.file_id >> std::quoted(file_record.display_name)
+              >> file_record.size_bytes >> file_type >> std::quoted(file_record.uploadedAt)
+              >> file_record.owner_group >> file_record.storage_path)) {
+            throw std::runtime_error("line_id: " + std::to_string(line_id) + " is illegal");
         }
         parse_file_type(file_type, file_record.type);
         std::string tmp;
         if (iss >> tmp) { // 判断是否有多余字段
-            throw std::runtime_error("line_id: " + std::to_string(line_id) +
-                                     " is illegal");
+            throw std::runtime_error("line_id: " + std::to_string(line_id) + " is illegal");
         }
         if (file_list.find(file_record.file_id) != file_list.end()) {
-            throw std::runtime_error("line_id: " + std::to_string(line_id) +
-                                     " is already existed");
+            throw std::runtime_error("line_id: " + std::to_string(line_id) + " is already existed");
         }
         file_list.emplace(file_record.file_id, file_record);
     }
@@ -124,8 +114,7 @@ get_group_file_list(const std::unordered_map<std::size_t, FileRecord>& file_list
                     std::string group) {
     std::vector<FileRecord> group_file_list;
     for (const auto file_record : file_list) {
-        if (file_record.second.owner_group == group ||
-            file_record.second.owner_group == "PUBLIC") {
+        if (file_record.second.owner_group == group || file_record.second.owner_group == "PUBLIC") {
             group_file_list.push_back(file_record.second);
         }
     }

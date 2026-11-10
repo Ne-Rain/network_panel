@@ -22,15 +22,12 @@ static constexpr int local_port = 8080;
 
 static void verify_remote_peer(httplib::SSLClient& client,
                                const std::string& expected_fingerprint) {
-    client.set_session_verifier([expected_fingerprint](
-                                    httplib::tls::session_t session) {
+    client.set_session_verifier([expected_fingerprint](httplib::tls::session_t session) {
         using Certificate = std::unique_ptr<X509, decltype(&X509_free)>;
-        Certificate certificate(
-            SSL_get1_peer_certificate(static_cast<SSL*>(session)), &X509_free);
-        return matches_device_certificate(certificate.get(),
-                                          expected_fingerprint)
-                   ? httplib::SSLVerifierResponse::CertificateAccepted
-                   : httplib::SSLVerifierResponse::CertificateRejected;
+        Certificate certificate(SSL_get1_peer_certificate(static_cast<SSL*>(session)), &X509_free);
+        return matches_device_certificate(certificate.get(), expected_fingerprint)
+            ? httplib::SSLVerifierResponse::CertificateAccepted
+            : httplib::SSLVerifierResponse::CertificateRejected;
     });
 }
 
@@ -64,16 +61,15 @@ static std::string make_session_id() {
 
 enum class SessionState { Missing, Invalid, Valid };
 // 获取当前会话Cookie
-static SessionState load_session(const httplib::Request& req, Session& out,
-                                 const std::string& server_fingerprint) {
+static SessionState
+load_session(const httplib::Request& req, Session& out, const std::string& server_fingerprint) {
     std::istringstream cookies(req.get_header_value("Cookie"));
     const std::string prefix = "netpanel_session=";
     std::string item;
 
     while (std::getline(cookies, item, ';')) {
         const auto start = item.find_first_not_of(" \t");
-        if (start == std::string::npos ||
-            item.compare(start, prefix.size(), prefix) != 0) {
+        if (start == std::string::npos || item.compare(start, prefix.size(), prefix) != 0) {
             continue;
         }
 
@@ -84,8 +80,8 @@ static SessionState load_session(const httplib::Request& req, Session& out,
         if (it == sessions.end()) {
             return SessionState::Invalid;
         }
-        if (it->second.expires_at <= SessionClock::now() ||
-            it->second.server_fingerprint != server_fingerprint) {
+        if (it->second.expires_at <= SessionClock::now()
+            || it->second.server_fingerprint != server_fingerprint) {
             sessions.erase(it);
             return SessionState::Invalid;
         }
@@ -98,9 +94,8 @@ static SessionState load_session(const httplib::Request& req, Session& out,
 }
 
 static void clear_session_cookie(httplib::Response& res) {
-    res.set_header(
-        "Set-Cookie",
-        "netpanel_session=; Path=/api; HttpOnly; SameSite=Strict; Max-Age=0");
+    res.set_header("Set-Cookie",
+                   "netpanel_session=; Path=/api; HttpOnly; SameSite=Strict; Max-Age=0");
 }
 
 static void append_json_string(std::string& out, const std::string& value) {
@@ -122,8 +117,7 @@ static void append_json_string(std::string& out, const std::string& value) {
     out += '"';
 }
 
-static constexpr char trusted_fingerprint_path[] =
-    "certs/trusted-server.sha256";
+static constexpr char trusted_fingerprint_path[] = "certs/trusted-server.sha256";
 
 static std::string read_trusted_fingerprint() {
     errno = 0;
@@ -132,10 +126,8 @@ static std::string read_trusted_fingerprint() {
         return {};
     }
     std::string fingerprint, extra;
-    if (!(file >> fingerprint) || file >> extra || file.bad() ||
-        fingerprint.size() != 64 ||
-        fingerprint.find_first_not_of("0123456789abcdef") !=
-            std::string::npos) {
+    if (!(file >> fingerprint) || file >> extra || file.bad() || fingerprint.size() != 64
+        || fingerprint.find_first_not_of("0123456789abcdef") != std::string::npos) {
         throw std::runtime_error("reading trusted server fingerprint failed");
     }
     return fingerprint;
@@ -145,23 +137,19 @@ static void save_trusted_fingerprint(const std::string& fingerprint) {
     char temporary[] = "certs/.trusted-server-XXXXXX";
     const int fd = mkstemp(temporary);
     if (fd < 0) {
-        throw std::runtime_error(
-            "creating trusted server fingerprint file failed");
+        throw std::runtime_error("creating trusted server fingerprint file failed");
     }
     const auto data = fingerprint + '\n';
     auto* file = fdopen(fd, "wb");
     if (!file) {
         close(fd);
         std::remove(temporary);
-        throw std::runtime_error(
-            "opening trusted server fingerprint file failed");
+        throw std::runtime_error("opening trusted server fingerprint file failed");
     }
-    const bool written =
-        std::fwrite(data.data(), 1, data.size(), file) == data.size() &&
-        std::fflush(file) == 0 && fsync(fd) == 0;
+    const bool written = std::fwrite(data.data(), 1, data.size(), file) == data.size()
+        && std::fflush(file) == 0 && fsync(fd) == 0;
     const bool closed = std::fclose(file) == 0;
-    if (!written || !closed ||
-        std::rename(temporary, trusted_fingerprint_path) != 0) {
+    if (!written || !closed || std::rename(temporary, trusted_fingerprint_path) != 0) {
         std::remove(temporary);
         throw std::runtime_error("saving trusted server fingerprint failed");
     }
@@ -180,8 +168,7 @@ public:
 
     void trust(const std::string& fingerprint, httplib::Response& res) {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (candidates_.size() != 1 ||
-            candidates_.front().fingerprint != fingerprint) {
+        if (candidates_.size() != 1 || candidates_.front().fingerprint != fingerprint) {
             res.status = 409;
             return;
         }
@@ -194,8 +181,7 @@ public:
 
     bool target(RemoteTarget& result) {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (candidates_.size() != 1 ||
-            candidates_.front().fingerprint != trusted_) {
+        if (candidates_.size() != 1 || candidates_.front().fingerprint != trusted_) {
             return false;
         }
         result = candidates_.front();
@@ -214,8 +200,7 @@ private:
         }
         const auto& target = candidates_.front();
         std::string json = "{\"state\":";
-        append_json_string(json, target.fingerprint == trusted_ ? "ready"
-                                                                : "untrusted");
+        append_json_string(json, target.fingerprint == trusted_ ? "ready" : "untrusted");
         json += ",\"name\":";
         append_json_string(json, target.name);
         json += ",\"host\":";
@@ -235,12 +220,11 @@ private:
 static bool is_local_browser(const httplib::Request& req) {
     const auto host = req.get_header_value("Host");
     const auto port = std::to_string(local_port);
-    return (host == "127.0.0.1:" + port || host == "localhost:" + port) &&
-           req.get_header_value("Origin") == "http://" + host;
+    return (host == "127.0.0.1:" + port || host == "localhost:" + port)
+        && req.get_header_value("Origin") == "http://" + host;
 }
 
-static bool make_file_listing(const std::string& body, const Session* session,
-                              std::string& json) {
+static bool make_file_listing(const std::string& body, const Session* session, std::string& json) {
     json = "{\"username\":";
     if (session) {
         append_json_string(json, session->username);
@@ -257,8 +241,7 @@ static bool make_file_listing(const std::string& body, const Session* session,
     bool first = true;
 
     while (input >> id) {
-        if (!(input >> name) ||
-            id.find_first_not_of("0123456789") != std::string::npos) {
+        if (!(input >> name) || id.find_first_not_of("0123456789") != std::string::npos) {
             return false;
         }
 
@@ -279,8 +262,8 @@ static bool make_file_listing(const std::string& body, const Session* session,
 }
 
 // 登录接口
-static void handle_login(const httplib::Request& req, httplib::Response& res,
-                         const RemoteTarget& target) {
+static void
+handle_login(const httplib::Request& req, httplib::Response& res, const RemoteTarget& target) {
     const auto username = req.get_param_value("username");
     const auto password = req.get_param_value("password");
     if (username.empty()) {
@@ -323,8 +306,7 @@ static void handle_login(const httplib::Request& req, httplib::Response& res,
         return;
     }
     const auto expires_at = SessionClock::now() + std::chrono::hours(1);
-    const Session session{username, password, group, expires_at,
-                          target.fingerprint};
+    const Session session{username, password, group, expires_at, target.fingerprint};
 
     std::string json;
     if (!make_file_listing(result->body, &session, json)) {
@@ -339,14 +321,14 @@ static void handle_login(const httplib::Request& req, httplib::Response& res,
         }
     }
     res.set_header("Set-Cookie",
-                   "netpanel_session=" + id +
-                       "; Path=/api; HttpOnly; SameSite=Strict; Max-Age=3600");
+                   "netpanel_session=" + id
+                       + "; Path=/api; HttpOnly; SameSite=Strict; Max-Age=3600");
     res.set_content(json, "application/json");
 }
 
 // 文件列表接口
-static void handle_files(const httplib::Request& req, httplib::Response& res,
-                         const RemoteTarget& target) {
+static void
+handle_files(const httplib::Request& req, httplib::Response& res, const RemoteTarget& target) {
     httplib::SSLClient client(target.host, target.port);
     verify_remote_peer(client, target.fingerprint);
     Session session;
@@ -374,17 +356,21 @@ static void handle_files(const httplib::Request& req, httplib::Response& res,
     const Session* identity = state == SessionState::Valid ? &session : nullptr;
 
     std::string json;
-    if (!make_file_listing(result->body, identity, json)) {
-        res.status = 502;
-        return;
+    json = "{\"username\":";
+    if (identity) {
+        append_json_string(json, identity->username);
+        json += ",\"group\":";
+        append_json_string(json, identity->group);
+    } else {
+        json += "null,\"group\":null";
     }
-
+    json += ",\"files\":" + result->body;
     res.set_content(json, "application/json");
 }
 
 // 下载接口
-static void handle_download(const httplib::Request& req, httplib::Response& res,
-                            const RemoteTarget& target) {
+static void
+handle_download(const httplib::Request& req, httplib::Response& res, const RemoteTarget& target) {
     const auto id = req.matches[1].str();
     httplib::SSLClient client(target.host, target.port);
     verify_remote_peer(client, target.fingerprint);
@@ -421,8 +407,8 @@ static void handle_download(const httplib::Request& req, httplib::Response& res,
 }
 
 // 上传接口
-static void handle_upload(const httplib::Request& req, httplib::Response& res,
-                          const RemoteTarget& target) {
+static void
+handle_upload(const httplib::Request& req, httplib::Response& res, const RemoteTarget& target) {
     const auto filename = req.get_param_value("name");
     httplib::SSLClient client(target.host, target.port);
     verify_remote_peer(client, target.fingerprint);
@@ -438,8 +424,7 @@ static void handle_upload(const httplib::Request& req, httplib::Response& res,
     }
 
     client.set_basic_auth(session.username, session.password);
-    auto result = client.Post("/files?name=" + filename, req.body,
-                              "application/octet-stream");
+    auto result = client.Post("/files?name=" + filename, req.body, "application/octet-stream");
     if (!result) {
         res.status = 502;
         return;
@@ -457,8 +442,7 @@ static void handle_upload(const httplib::Request& req, httplib::Response& res,
     bool first = true;
     std::string id;
     while (input >> id) {
-        if (id.empty() ||
-            id.find_first_not_of("0123456789") != std::string::npos) {
+        if (id.empty() || id.find_first_not_of("0123456789") != std::string::npos) {
             res.status = 502;
             return;
         }
@@ -477,8 +461,7 @@ int main() {
     std::string trusted_fingerprint;
     try {
         const auto identity = load_or_create_device_identity();
-        std::cout << "Device certificate SHA-256: " << identity.fingerprint
-                  << '\n';
+        std::cout << "Device certificate SHA-256: " << identity.fingerprint << '\n';
         trusted_fingerprint = read_trusted_fingerprint();
     } catch (const std::exception& error) {
         std::cerr << "Client initialization failed: " << error.what() << '\n';
@@ -492,26 +475,23 @@ int main() {
     }
     std::cout << "http://127.0.0.1:" << local_port << "/\n";
 
-    local.Post("/api/discover",
-               [&](const httplib::Request& req, httplib::Response& res) {
-                   if (!is_local_browser(req)) {
-                       res.status = 403;
-                       return;
-                   }
-                   discovery.discover(res);
-               });
-    local.Post("/api/discover/trust",
-               [&](const httplib::Request& req, httplib::Response& res) {
-                   if (!is_local_browser(req)) {
-                       res.status = 403;
-                       return;
-                   }
-                   discovery.trust(req.body, res);
-               });
+    local.Post("/api/discover", [&](const httplib::Request& req, httplib::Response& res) {
+        if (!is_local_browser(req)) {
+            res.status = 403;
+            return;
+        }
+        discovery.discover(res);
+    });
+    local.Post("/api/discover/trust", [&](const httplib::Request& req, httplib::Response& res) {
+        if (!is_local_browser(req)) {
+            res.status = 403;
+            return;
+        }
+        discovery.trust(req.body, res);
+    });
 
     const auto with_target = [&discovery](auto handler) {
-        return [&discovery, handler](const httplib::Request& req,
-                                     httplib::Response& res) {
+        return [&discovery, handler](const httplib::Request& req, httplib::Response& res) {
             RemoteTarget target{};
             if (!discovery.target(target)) {
                 res.status = 503;
