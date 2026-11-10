@@ -19,7 +19,6 @@ const uploadInput = document.getElementById("upload-input");
 const filesStatus = document.getElementById("files-status");
 const filesError = document.getElementById("files-error");
 const uploadProgress = document.getElementById("upload-progress");
-const filesTitle = document.getElementById("files-title");
 const groupLabel = document.getElementById("group-label");
 const loginLink = document.getElementById("login-link");
 const fileNavigation = document.getElementById("file-navigation");
@@ -116,7 +115,7 @@ function showFiles(files) {
         }
 
         const download = document.createElement("a");
-        download.className = "text-action";
+        download.className = "text-action download-action";
         download.href = "/api/files/" + encodeURIComponent(file.id);
         download.download = "";
         download.append(icon("download"), "下载");
@@ -147,9 +146,7 @@ function setAccount(identity) {
     groupLabel.title = groupLabel.textContent;
     loginLink.hidden = Boolean(account);
     uploadButton.disabled = refreshButton.disabled && Boolean(account);
-    filesTitle.textContent = account ? "文件" : "公共文件";
-    document.getElementById("file-banner").classList.toggle("is-member", Boolean(account));
-    document.getElementById("files-description").textContent = account ? "本组文件与公共文件" : "直接浏览和下载公共文件";
+    filesPanel.setAttribute("aria-label", account ? "本组文件与公共文件" : "公共文件");
     document.getElementById("empty-description").textContent = account
         ? "当前没有可下载的文件。" : "当前没有可下载的公共文件。";
 }
@@ -173,7 +170,7 @@ function showView(focus = false) {
         loginError.hidden = true;
     }
     if (focus) {
-        (serverReady ? (signingIn ? usernameInput : filesTitle) : discoveryTitle).focus();
+        (serverReady ? (signingIn ? usernameInput : filesPanel) : discoveryTitle).focus();
     }
 }
 

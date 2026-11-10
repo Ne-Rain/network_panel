@@ -31,14 +31,14 @@ std::unordered_map<std::string, GroupAccount> load_accounts(const std::string& p
         GroupAccount group_account;
         std::istringstream iss(line);
         if (!(iss >> group_account.username >> group_account.password >> group_account.group)) {
-            throw std::runtime_error("line_id: " + std::to_string(line_id) + "is illegal");
+            throw std::runtime_error("line_id: " + std::to_string(line_id) + " is illegal");
         }
         std::string tmp;
         if (iss >> tmp) { // 判断是否有多余字段
-            throw std::runtime_error("line_id: " + std::to_string(line_id) + "is illegal");
+            throw std::runtime_error("line_id: " + std::to_string(line_id) + " is illegal");
         }
         if (group_accounts.find(group_account.username) != group_accounts.end()) {
-            throw std::runtime_error("line_id: " + std::to_string(line_id) + "is already existed");
+            throw std::runtime_error("line_id: " + std::to_string(line_id) + " is already existed");
         }
         group_accounts.emplace(group_account.username, group_account);
     }

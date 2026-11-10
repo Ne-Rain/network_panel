@@ -1,10 +1,14 @@
+#include <cstdint>
+#include <iomanip>
 #define CPPHTTPLIB_OPENSSL_SUPPORT
+
 #include "auth.hpp"
 #include "device_discovery.hpp"
 #include "device_identity.hpp"
 #include "file_catalog.hpp"
 #include "httplib.h"
 #include "tool.h"
+
 #include <cstddef>
 #include <cstdlib>
 #include <exception>
@@ -52,12 +56,11 @@ std::size_t reserve_file_id(std::mutex& id_mtx, std::size_t& last_file_id) {
     return next_id;
 }
 
-/**创建临时上传路径
+/**创建临时路径
     mkstemp()生成一个唯一的临时文件名，并在同一步创建文件
 */
 std::string make_tmp_path(const std::string& tmp_dir, std::size_t id) {
-    const std::string pattern =
-        tmp_dir + "upload-" + std::to_string(id) + "-XXXXXX";
+    const std::string pattern = tmp_dir + "upload-" + std::to_string(id) + "-XXXXXX";
 
     // mkstemp 会原地替换末尾的六个 X，需要可写的字符数组
     std::vector<char> path(pattern.begin(), pattern.end());
@@ -76,7 +79,7 @@ std::string make_tmp_path(const std::string& tmp_dir, std::size_t id) {
     return std::string(path.data());
 }
 
-void publish_upload(std::size_t id, const std::string& name,
+void publish_upload(std::size_t id, const std::string& name, std::uint64_t file_size,
                     const std::string& group, const std::string& temp_path,
                     const std::string& upload_dir,
                     std::unordered_map<std::size_t, FileRecord>& file_list,
@@ -93,7 +96,11 @@ void publish_upload(std::size_t id, const std::string& name,
 
         // 准备完整的新文件表，当前内存表仍可保留
         auto next_files = file_list;
-        if (!next_files.emplace(id, FileRecord{id, name, group, final_path})
+        FileType file_type = get_file_type(name);
+        std::string local_time = make_local_time();
+        if (!next_files
+                 .emplace(id, FileRecord{id, name, file_size, file_type, local_time,
+                                         group, final_path})
                  .second) {
             throw std::runtime_error("Duplicate file ID");
         }
@@ -107,8 +114,10 @@ void publish_upload(std::size_t id, const std::string& name,
         // 把内存表写入新磁盘文件表
         for (const auto& entry : next_files) {
             const auto& file = entry.second;
-            out << file.file_id << ' ' << file.display_name << ' '
-                << file.owner_group << ' ' << file.storage_path << '\n';
+            out << file.file_id << ' ' << std::quoted(file.display_name) << ' '
+                << file.size_bytes << ' ' << file_type_to_string(file.type) << ' '
+                << std::quoted(file.uploadedAt) << ' ' << file.owner_group << ' '
+                << file.storage_path << '\n';
         }
         out.close();
         if (!out) {
@@ -150,8 +159,7 @@ int main() {
     DeviceIdentity identity;
     try {
         identity = load_or_create_device_identity();
-        std::cout << "Device certificate SHA-256: " << identity.fingerprint
-                  << '\n';
+        std::cout << "Device certificate SHA-256: " << identity.fingerprint << '\n';
     } catch (const std::exception& error) {
         std::cerr << "Device identity initialization failed: " << error.what()
                   << '\n';
@@ -159,8 +167,7 @@ int main() {
     }
 
     // 1. 创建https服务对象
-    httplib::SSLServer server(identity.pem_path.c_str(),
-                              identity.pem_path.c_str());
+    httplib::SSLServer server(identity.pem_path.c_str(), identity.pem_path.c_str());
     if (!server.is_valid()) {
         std::cerr << "HTTPS 初始化失败，请检查证书和私钥\n";
         return 1;
@@ -218,10 +225,9 @@ int main() {
     server.Get("/whoami", [&accounts](const httplib::Request& req,
                                       httplib::Response& res) {
         std::string group;
-        const bool valid =
-            req.get_header_value_count("Authorization") == 1 &&
-            authenticate_basic(req.get_header_value("Authorization"), accounts,
-                               group);
+        const bool valid = req.get_header_value_count("Authorization") == 1 &&
+                           authenticate_basic(req.get_header_value("Authorization"),
+                                              accounts, group);
         if (!valid) {
             res.status = 401;
             res.set_header("WWW-Authenticate", "Basic realm=\"netpanel\"");
@@ -232,9 +238,8 @@ int main() {
         res.set_content(group, "text/plain");
     });
 
-    server.Get("/files", [&accounts, &file_list,
-                          &file_mtx](const httplib::Request& req,
-                                     httplib::Response& res) {
+    server.Get("/files", [&accounts, &file_list, &file_mtx](
+                             const httplib::Request& req, httplib::Response& res) {
         std::string group;
         std::size_t auth_header_vaule_count =
             req.get_header_value_count("Authorization");
@@ -302,54 +307,58 @@ int main() {
         res.set_file_content(record.storage_path, "application/octet-stream");
     });
 
-    server.Post("/files", [&accounts, &file_list, &file_id_mtx, &last_file_id,
-                           &file_mtx,
-                           upload_dir](const httplib::Request& req,
-                                       httplib::Response& res,
-                                       const httplib::ContentReader& reader) {
-        std::string group;
-        if (req.get_header_value_count("Authorization") != 1 ||
-            !authenticate_basic(req.get_header_value("Authorization"), accounts,
-                                group)) {
-            res.status = 401;
-            res.set_header("WWW-Authenticate", "Basic realm=\"netpanel\"");
-            return;
-        }
-        const auto name = req.get_param_value("name");
-        if (name.empty()) {
-            res.status = 400;
-            return;
-        }
-        if (!std::regex_match(name, valid_name)) {
-            res.status = 400;
-            return;
-        }
-        const auto id = reserve_file_id(file_id_mtx, last_file_id);
-        const auto temp_path = make_tmp_path(upload_dir, id);
-
-        std::ofstream out(temp_path, std::ios::binary);
-        if (!out) {
-            res.status = 500;
-            return;
-        }
-        const bool received = reader([&](const char* data, std::size_t size) {
-            out.write(data, static_cast<std::streamsize>(size));
-            return static_cast<bool>(out);
-        });
-        out.close();
-        if (!out || !received) {
-            std::remove(temp_path.c_str());
-            if (res.status < 400) {
-                res.status = !out ? 500 : 400;
+    server.Post(
+        "/files", [&accounts, &file_list, &file_id_mtx, &last_file_id, &file_mtx,
+                   upload_dir](const httplib::Request& req, httplib::Response& res,
+                               const httplib::ContentReader& reader) {
+            std::string group;
+            if (req.get_header_value_count("Authorization") != 1 ||
+                !authenticate_basic(req.get_header_value("Authorization"), accounts,
+                                    group)) {
+                res.status = 401;
+                res.set_header("WWW-Authenticate", "Basic realm=\"netpanel\"");
+                return;
             }
-            return;
-        }
-        publish_upload(id, name, group, temp_path, upload_dir, file_list,
-                       file_mtx);
+            const auto name = req.get_param_value("name");
+            if (name.empty()) {
+                res.status = 400;
+                return;
+            }
+            if (!std::regex_match(name, valid_name)) {
+                res.status = 400;
+                return;
+            }
+            const auto id = reserve_file_id(file_id_mtx, last_file_id);
+            const auto temp_path = make_tmp_path(upload_dir, id);
 
-        res.status = 201;
-        res.set_content(std::to_string(id), "text/plain");
-    });
+            std::ofstream out(temp_path, std::ios::binary);
+            if (!out) {
+                res.status = 500;
+                return;
+            }
+            std::uint64_t file_size = 0;
+            const bool received = reader([&](const char* data, std::size_t size) {
+                out.write(data, static_cast<std::streamsize>(size));
+                if (out) {
+                    file_size += size;
+                    return true;
+                }
+                return false;
+            });
+            out.close();
+            if (!out || !received) {
+                std::remove(temp_path.c_str());
+                if (res.status < 400) {
+                    res.status = !out ? 500 : 400;
+                }
+                return;
+            }
+            publish_upload(id, name, file_size, group, temp_path, upload_dir,
+                           file_list, file_mtx);
+
+            res.status = 201;
+            res.set_content(std::to_string(id), "text/plain");
+        });
 
     if (!server.bind_to_port(host, port)) {
         std::cerr << "Failed to bind HTTPS port\n";
@@ -362,8 +371,7 @@ int main() {
             return 1;
         }
     } catch (const std::exception& error) {
-        std::cerr << "Discovery initialization failed: " << error.what()
-                  << '\n';
+        std::cerr << "Discovery initialization failed: " << error.what() << '\n';
         return 1;
     }
     return 0;

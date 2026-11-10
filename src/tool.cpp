@@ -1,9 +1,13 @@
 #include "tool.h"
 #include <climits>
 #include <cstddef>
+#include <ctime>
 #include <fcntl.h>
+#include <iomanip>
 #include <limits>
 #include <openssl/evp.h>
+#include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -51,4 +55,17 @@ bool string_to_size_t(const std::string& s, std::size_t& value) {
         value = value * 10 + digit;
     }
     return true;
+}
+
+std::string make_local_time(){
+    const std::time_t now = std::time(nullptr);
+    std::tm local_time{};
+
+    if(now == std::time_t(-1) || !::localtime_r(&now, &local_time)){
+        throw std::runtime_error("failed to get local time");
+    }
+
+    std::ostringstream out;
+    out << std::put_time(&local_time, "%y/%m/%d %H:%M");
+    return out.str();
 }
