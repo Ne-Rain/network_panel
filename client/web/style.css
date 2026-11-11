@@ -139,20 +139,114 @@ h1 { font-size: clamp(24px, 4vw, 32px); line-height: 1.25; letter-spacing: -.025
     border-radius: var(--panel-radius);
 }
 
-.table-container { overflow-x: auto; }
-table { width: 100%; min-width: 660px; border-collapse: collapse; text-align: left; }
-th:nth-child(2) { width: 14%; }
-th:nth-child(3), th:nth-child(4) { width: 11%; }
-th:nth-child(5) { width: 17%; }
-th:last-child { width: 10%; }
+.table-container { overflow: auto; }
+.table-container.has-scrollable-files { scrollbar-gutter: stable; }
+.table-container::-webkit-scrollbar { width: 9px; }
+.table-container::-webkit-scrollbar-track:vertical { background: transparent; }
+.table-container::-webkit-scrollbar-thumb:vertical { background: #c4c5cc; border-radius: 999px; }
+.table-container::-webkit-scrollbar-button:vertical { display: none; height: 0; }
+.has-scrollable-files thead th { position: sticky; top: 0; z-index: 1; }
+table {
+    --file-checkbox-size: 13px;
+    --file-name-gap: 10px;
+    --file-name-padding: 10px;
+    --file-icon-size: 34px;
+    width: 100%;
+    min-width: 940px;
+    table-layout: fixed;
+    border-collapse: collapse;
+    text-align: left;
+}
+th:first-child { width: 53%; }
+th:nth-child(2) { width: 9.5%; }
+th:nth-child(3) { width: 9.5%; }
+th:nth-child(4) { width: 9.5%; }
+th:nth-child(5) { width: 18.5%; }
 th, td { padding: 10px 16px; vertical-align: middle; white-space: nowrap; }
+th:first-child {
+    padding-inline-start: calc(var(--file-name-padding) + var(--file-checkbox-size) + var(--file-name-gap));
+}
 th { background: var(--surface); color: var(--muted); font-size: 14px; font-weight: 650; }
+.sort-button {
+    display: inline-grid;
+    place-content: center;
+    inline-size: 24px;
+    block-size: 24px;
+    margin-inline-start: 4px;
+    padding: 0;
+    vertical-align: middle;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--muted);
+    font-size: 8px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0;
+}
+th:hover .sort-button, .sort-button:focus-visible { opacity: 1; }
+.sort-button:hover { background: var(--subtle); }
+th[aria-sort="ascending"] .sort-button span:last-child,
+th[aria-sort="descending"] .sort-button span:first-child { opacity: .35; }
+@media (hover: none) {
+    .sort-button { opacity: 1; }
+}
 td { border-top: 1px solid var(--line); }
-th:last-child, td:last-child { text-align: center; }
+tbody tr { cursor: pointer; }
 tbody tr:hover { background: var(--subtle); }
-.file-name { white-space: normal; }
-.file-name-content { display: flex; align-items: center; gap: 11px; min-width: 155px; }
-.file-name-content span:last-child { overflow-wrap: anywhere; font-weight: 600; }
+.file-name { white-space: normal; padding-inline-start: var(--file-name-padding); }
+.file-name-content { display: flex; align-items: center; gap: var(--file-name-gap); min-width: 0; }
+.file-name-content .file-icon { width: var(--file-icon-size); height: var(--file-icon-size); }
+.file-display-name { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-weight: 600; }
+.file-checkbox { flex: none; width: var(--file-checkbox-size); height: var(--file-checkbox-size); margin: 0; accent-color: var(--ink); cursor: pointer; }
+.file-checkbox, .row-actions { opacity: 0; }
+tbody tr:hover .file-checkbox, tbody tr:focus-visible .file-checkbox,
+tbody tr:has(:focus-visible) .file-checkbox,
+tbody tr:hover .row-actions, tbody tr:focus-visible .row-actions,
+tbody tr:has(:focus-visible) .row-actions,
+tbody tr.is-selected .file-checkbox { opacity: 1; }
+tbody tr.is-selected { background: var(--subtle); }
+.row-actions { display: flex; flex: none; gap: 4px; margin-inline-start: auto; }
+.row-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--ink);
+    cursor: pointer;
+}
+.row-action:not(:disabled):hover { background: #e5e5e5; }
+.row-action:disabled { cursor: default; opacity: .4; }
+@media (hover: none) {
+    .file-checkbox, .row-actions { opacity: 1; }
+}
+.delete-dialog {
+    width: min(560px, calc(100% - 32px));
+    max-height: calc(100% - 32px);
+    overflow: auto;
+    padding: 28px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--surface);
+    color: var(--ink);
+    box-shadow: 0 20px 70px #0003;
+}
+.delete-dialog::backdrop { background: #0006; }
+.delete-dialog-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.delete-dialog-heading h2 { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 22px; }
+#delete-description { margin: 24px 0 8px; color: var(--muted); }
+.delete-file-name { margin: 0 0 20px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.delete-dialog-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 28px; }
+.delete-dialog-actions .button { min-width: 100px; cursor: pointer; }
+.button-danger { color: #dc4446; border-color: var(--line); background: var(--surface); }
+.button-danger:not(:disabled):hover { background: #fff0f0; }
+.delete-dialog .error-message { margin-top: 16px; }
 .file-id, .metadata { color: var(--muted); font-variant-numeric: tabular-nums; }
 .empty-state { padding: 32px; text-align: center; }
 .empty-state h2 { font-size: 18px; }

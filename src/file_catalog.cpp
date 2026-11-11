@@ -103,9 +103,6 @@ std::unordered_map<std::size_t, FileRecord> load_files(const std::string& path) 
     if (in.bad()) { // 读取文件发生IO错误
         throw std::runtime_error("Failed to read account file: " + path);
     }
-    if (file_list.empty()) {
-        throw std::runtime_error("account file is empty");
-    }
     return file_list;
 }
 

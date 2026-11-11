@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
     <title>NetPanel 局域网文件</title>
-    <link rel="stylesheet" href="./style.css?v=compact-toolbar">
-    <script src="./app.js?v=file-list-2" defer></script>
+    <link rel="stylesheet" href="./style.css?v=single-selection-1">
+    <script src="./app.js?v=single-selection-1" defer></script>
 </head>
 <body>
     <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -17,6 +17,8 @@
         <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 9a8 8 0 0 0-14-3L4 9m0-5v5h5m-5 6a8 8 0 0 0 14 3l2-3m0 5v-5h-5"/></symbol>
         <symbol id="icon-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6zM14 3v5h4M9 12h6m-6 4h6"/></symbol>
         <symbol id="icon-archive" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6zM14 3v5h4M10 4h2m-1 3h2m-3 3h2m-1 3h2"/><circle cx="12" cy="17" r="1.5"/></symbol>
+        <symbol id="icon-delete" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/></symbol>
+        <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
         <symbol id="icon-eye" viewBox="0 0 24 24"><path d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="2.5"/></symbol>
         <symbol id="icon-eye-off" viewBox="0 0 24 24"><path d="m3 3 18 18M10 6a10 10 0 0 1 2 0c6 0 10 6 10 6a17 17 0 0 1-3 3m-3 2a9 9 0 0 1-4 1C6 18 2 12 2 12a18 18 0 0 1 4-4"/></symbol>
         <symbol id="icon-back" viewBox="0 0 24 24"><path d="M21 12H3m7-7-7 7 7 7"/></symbol>
@@ -78,12 +80,27 @@
                 <table>
                     <thead>
                         <tr>
-                            <th scope="col">文件名</th>
-                            <th scope="col">编号</th>
-                            <th scope="col">大小</th>
+                            <th scope="col" aria-sort="ascending">
+                                文件名<button type="button" class="sort-button" data-sort-field="name" aria-label="按文件名排序">
+                                    <span aria-hidden="true">▲</span><span aria-hidden="true">▼</span>
+                                </button>
+                            </th>
+                            <th scope="col">
+                                编号<button type="button" class="sort-button" data-sort-field="id" aria-label="按编号排序">
+                                    <span aria-hidden="true">▲</span><span aria-hidden="true">▼</span>
+                                </button>
+                            </th>
+                            <th scope="col">
+                                大小<button type="button" class="sort-button" data-sort-field="bytes" aria-label="按大小排序">
+                                    <span aria-hidden="true">▲</span><span aria-hidden="true">▼</span>
+                                </button>
+                            </th>
                             <th scope="col">文件类型</th>
-                            <th scope="col">修改时间</th>
-                            <th scope="col">操作</th>
+                            <th scope="col">
+                                修改时间<button type="button" class="sort-button" data-sort-field="uploadedAt" aria-label="按修改时间排序">
+                                    <span aria-hidden="true">▲</span><span aria-hidden="true">▼</span>
+                                </button>
+                            </th>
                         </tr>
                     </thead>
                     <tbody id="file-rows"></tbody>
@@ -129,5 +146,20 @@
         </section>
         <noscript><p class="workspace message error-message">请启用 JavaScript 后使用 NetPanel。</p></noscript>
     </main>
+    <dialog id="delete-dialog" class="delete-dialog" aria-labelledby="delete-title" aria-describedby="delete-description">
+        <div class="delete-dialog-heading">
+            <h2 id="delete-title"><svg class="icon" aria-hidden="true"><use href="#icon-delete"/></svg>删除</h2>
+            <button id="delete-close" class="row-action" type="button" aria-label="关闭删除确认">
+                <svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg>
+            </button>
+        </div>
+        <p id="delete-description">确定要删除这个文件吗？</p>
+        <p id="delete-file-name" class="delete-file-name"></p>
+        <p id="delete-error" class="message error-message" role="alert" hidden></p>
+        <div class="delete-dialog-actions">
+            <button id="delete-cancel" class="button" type="button">取消</button>
+            <button id="delete-confirm" class="button button-danger" type="button">确认删除</button>
+        </div>
+    </dialog>
 </body>
 </html>

@@ -261,9 +261,9 @@ static bool make_file_listing(const std::string& body, const Session* session, s
     return true;
 }
 
+namespace {
 // 登录接口
-static void
-handle_login(const httplib::Request& req, httplib::Response& res, const RemoteTarget& target) {
+void handle_login(const httplib::Request& req, httplib::Response& res, const RemoteTarget& target) {
     const auto username = req.get_param_value("username");
     const auto password = req.get_param_value("password");
     if (username.empty()) {
@@ -279,6 +279,10 @@ handle_login(const httplib::Request& req, httplib::Response& res, const RemoteTa
     auto who = client.Get("/whoami");
     if (!who) {
         res.status = 502;
+        return;
+    }
+    if (who->status == 401) {
+        res.status = 401;
         return;
     }
     if (who->status != 200) {
@@ -309,10 +313,13 @@ handle_login(const httplib::Request& req, httplib::Response& res, const RemoteTa
     const Session session{username, password, group, expires_at, target.fingerprint};
 
     std::string json;
-    if (!make_file_listing(result->body, &session, json)) {
-        res.status = 502;
-        return;
-    }
+    json = "{\"username\":";
+    append_json_string(json, session.username);
+    json += ",\"group\":";
+    append_json_string(json, session.group);
+
+    json += ",\"files\":" + result->body;
+    json += '}';
     {
         std::lock_guard<std::mutex> lock(sessions_mtx);
         if (!sessions.emplace(id, session).second) {
@@ -327,8 +334,7 @@ handle_login(const httplib::Request& req, httplib::Response& res, const RemoteTa
 }
 
 // 文件列表接口
-static void
-handle_files(const httplib::Request& req, httplib::Response& res, const RemoteTarget& target) {
+void handle_files(const httplib::Request& req, httplib::Response& res, const RemoteTarget& target) {
     httplib::SSLClient client(target.host, target.port);
     verify_remote_peer(client, target.fingerprint);
     Session session;
@@ -364,13 +370,14 @@ handle_files(const httplib::Request& req, httplib::Response& res, const RemoteTa
     } else {
         json += "null,\"group\":null";
     }
-    json += ",\"files\":" + result->body;
+    json += ",\"files\":" + result->body + '}';
     res.set_content(json, "application/json");
 }
 
 // 下载接口
-static void
-handle_download(const httplib::Request& req, httplib::Response& res, const RemoteTarget& target) {
+void handle_download(const httplib::Request& req,
+                     httplib::Response& res,
+                     const RemoteTarget& target) {
     const auto id = req.matches[1].str();
     httplib::SSLClient client(target.host, target.port);
     verify_remote_peer(client, target.fingerprint);
@@ -407,8 +414,9 @@ handle_download(const httplib::Request& req, httplib::Response& res, const Remot
 }
 
 // 上传接口
-static void
-handle_upload(const httplib::Request& req, httplib::Response& res, const RemoteTarget& target) {
+void handle_upload(const httplib::Request& req,
+                   httplib::Response& res,
+                   const RemoteTarget& target) {
     const auto filename = req.get_param_value("name");
     httplib::SSLClient client(target.host, target.port);
     verify_remote_peer(client, target.fingerprint);
@@ -457,6 +465,35 @@ handle_upload(const httplib::Request& req, httplib::Response& res, const RemoteT
     res.set_content(json, "application/json");
 }
 
+// 删除接口
+void handle_delete(const httplib::Request& req,
+                   httplib::Response& res,
+                   const RemoteTarget& target) {
+    httplib::SSLClient client(target.host, target.port);
+    verify_remote_peer(client, target.fingerprint);
+    Session session;
+    const auto state = load_session(req, session, target.fingerprint);
+    if (state != SessionState::Valid) {
+        if (state == SessionState::Invalid) {
+            clear_session_cookie(res);
+        }
+        res.status = 401;
+        return;
+    }
+    client.set_basic_auth(session.username, session.password);
+    const auto id = req.matches[1].str();
+    auto result = client.Delete("/file/" + id);
+    if (!result) {
+        res.status = 502;
+        return;
+    }
+    res.status = result->status;
+    if (result->status != 204) {
+        return;
+    }
+}
+} // namespace
+
 int main() {
     std::string trusted_fingerprint;
     try {
@@ -504,6 +541,7 @@ int main() {
     local.Get("/api/files", with_target(handle_files));
     local.Get("/api/files/([0-9]+)", with_target(handle_download));
     local.Post("/api/files", with_target(handle_upload));
+    local.Delete("/api/files/([0-9]+)", with_target(handle_delete));
 
     if (!local.listen("127.0.0.1", local_port)) {
         std::cerr << "Failed to listen " << local_port << '\n';

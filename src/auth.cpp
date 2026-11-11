@@ -45,9 +45,6 @@ std::unordered_map<std::string, GroupAccount> load_accounts(const std::string& p
     if (in.bad()) { // 读取文件发生IO错误
         throw std::runtime_error("Failed to read account file: " + path);
     }
-    if (group_accounts.empty()) {
-        throw std::runtime_error("account file is empty");
-    }
     return group_accounts;
 }
 

@@ -12,6 +12,8 @@ const fileRows = document.getElementById("file-rows");
 const fileCount = document.getElementById("file-count");
 const accountLabel = document.getElementById("account-label");
 const tableContainer = document.getElementById("table-container");
+const fileTable = tableContainer.querySelector("table");
+const visibleFileLimit = 10;
 const emptyState = document.getElementById("empty-state");
 const refreshButton = document.getElementById("refresh-button");
 const uploadButton = document.getElementById("upload-button");
@@ -39,6 +41,56 @@ let pendingFingerprint = "";
 let account = null;
 let pendingList = null;
 
+const deleteDialog = document.getElementById("delete-dialog");
+const deleteFileName = document.getElementById("delete-file-name");
+const deleteError = document.getElementById("delete-error");
+const deleteConfirm = document.getElementById("delete-confirm");
+const deleteCancel = document.getElementById("delete-cancel");
+const deleteClose = document.getElementById("delete-close");
+const selectedFileIds = new Set();
+let deleteTarget = null;
+let deleting = false;
+
+let displayedFiles = [];
+let sortField = "name";
+let sortAscending = true;
+const sortButtons = tableContainer.querySelectorAll("[data-sort-field]");
+const fileNameOrder = new Intl.Collator("zh-CN", { numeric: true });
+
+const fileTypeLabels = new Map([
+    ["file", "文档"],
+    ["image", "图片"],
+    ["video", "视频"],
+    ["audio", "音频"],
+    ["archive", "压缩文件"],
+    ["other", "文件"]
+]);
+
+function formatFileSize(bytes) {
+    if (bytes === null) {
+        return "—";
+    }
+
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let divisor = 1n;
+    let unit = 0;
+    while (unit < units.length - 1 && bytes >= divisor * 1000n) {
+        divisor *= 1000n;
+        unit++;
+    }
+
+    // Round to tenths without converting the byte count to a floating-point number.
+    const tenths = (bytes * 10n + divisor / 2n) / divisor;
+    return (tenths / 10n) + "." + (tenths % 10n) + " " + units[unit];
+}
+
+function formatUploadTime(uploadedAt) {
+    if (typeof uploadedAt !== "string" || !/^\d{2}\/\d{2}\/\d{2} \d{2}[/:]\d{2}$/.test(uploadedAt)) {
+        return null;
+    }
+    return uploadedAt.replace(/\/(\d{2})$/, ":$1");
+}
+
 function validateFile(file) {
     const id = file?.id;
     const name = file?.name;
@@ -48,7 +100,14 @@ function validateFile(file) {
         throw new Error("文件列表格式不正确。");
     }
 
-    return { id: String(id), name };
+    const sizeBytes = file.size_bytes;
+    return {
+        id: String(id),
+        name,
+        bytes: typeof sizeBytes === "string" && /^\d{1,20}$/.test(sizeBytes) ? BigInt(sizeBytes) : null,
+        type: fileTypeLabels.get(file.type) ?? "—",
+        uploadedAt: formatUploadTime(file.uploadedAt)
+    };
 }
 
 async function readListing(response) {
@@ -87,10 +146,97 @@ function icon(name) {
     return svg;
 }
 
+function compareFiles(left, right) {
+    const direction = sortAscending ? 1 : -1;
+    if (sortField === "name") {
+        return direction * fileNameOrder.compare(left.name, right.name);
+    }
+
+    const a = sortField === "id" ? BigInt(left.id) : left[sortField];
+    const b = sortField === "id" ? BigInt(right.id) : right[sortField];
+    if (a === b) {
+        return 0;
+    }
+    if (a === null || b === null) {
+        return a === null ? 1 : -1;
+    }
+    return direction * (a < b ? -1 : 1);
+}
+
+for (const button of sortButtons) {
+    button.addEventListener("click", () => {
+        const field = button.dataset.sortField;
+        sortAscending = field !== sortField || !sortAscending;
+        sortField = field;
+
+        tableContainer.querySelector("[aria-sort]")?.removeAttribute("aria-sort");
+        button.closest("th").setAttribute("aria-sort", sortAscending ? "ascending" : "descending");
+        showFiles(displayedFiles);
+    });
+}
+
+function updateFileListHeight() {
+    const scrollable = fileRows.rows.length > visibleFileLimit;
+    tableContainer.classList.toggle("has-scrollable-files", scrollable);
+    if (!scrollable) {
+        tableContainer.style.maxHeight = "";
+        return;
+    }
+
+    const tableBounds = fileTable.getBoundingClientRect();
+    if (tableBounds.height === 0) {
+        return;
+    }
+
+    const lastVisibleRow = fileRows.rows[visibleFileLimit - 1].getBoundingClientRect();
+    const bordersAndScrollbar = tableContainer.offsetHeight - tableContainer.clientHeight;
+    tableContainer.style.maxHeight = (lastVisibleRow.bottom - tableBounds.top + bordersAndScrollbar) + "px";
+}
+
+const fileListResizeObserver = new ResizeObserver(updateFileListHeight);
+fileListResizeObserver.observe(fileTable);
+fileListResizeObserver.observe(tableContainer);
+
+function selectFile(id) {
+    selectedFileIds.clear();
+    if (id !== null) selectedFileIds.add(id);
+    for (const row of fileRows.rows) {
+        const selected = selectedFileIds.has(row.dataset.fileId);
+        row.querySelector(".file-checkbox").checked = selected;
+        row.classList.toggle("is-selected", selected);
+    }
+}
+
 function showFiles(files) {
+    displayedFiles = files;
+    const availableIds = new Set(files.map(file => file.id));
+    for (const id of selectedFileIds) {
+        if (!availableIds.has(id)) selectedFileIds.delete(id);
+    }
     const rows = document.createDocumentFragment();
-    for (const file of files) {
+    for (const file of [...files].sort(compareFiles)) {
         const row = document.createElement("tr");
+        row.dataset.fileId = file.id;
+        row.tabIndex = 0;
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.className = "file-checkbox";
+        checkbox.setAttribute("aria-label", "选择 " + file.name);
+        checkbox.checked = selectedFileIds.has(file.id);
+        row.classList.toggle("is-selected", checkbox.checked);
+        const selectRow = () => selectFile(file.id);
+        checkbox.addEventListener("change", () => {
+            selectFile(checkbox.checked ? file.id : null);
+        });
+        row.addEventListener("click", event => {
+            if (event.target.closest("input, a, button")) return;
+            selectFile(selectedFileIds.has(file.id) ? null : file.id);
+        });
+        row.addEventListener("keydown", event => {
+            if (event.target !== row || (event.key !== "Enter" && event.key !== " ")) return;
+            event.preventDefault();
+            selectFile(selectedFileIds.has(file.id) ? null : file.id);
+        });
         const nameCell = row.insertCell();
         nameCell.className = "file-name";
         const nameContent = document.createElement("div");
@@ -101,26 +247,43 @@ function showFiles(files) {
         badge.className = archive ? "file-icon archive" : documentFile ? "file-icon document" : "file-icon";
         badge.append(icon(archive ? "archive" : "file"));
         const name = document.createElement("span");
+        name.className = "file-display-name";
         name.textContent = file.name;
-        nameContent.append(badge, name);
+        nameContent.append(checkbox, badge, name);
         nameCell.append(nameContent);
 
         const idCell = row.insertCell();
         idCell.className = "file-id";
         idCell.textContent = file.id;
-        for (let column = 0; column < 3; column++) {
+        for (const value of [formatFileSize(file.bytes), file.type, file.uploadedAt ?? "—"]) {
             const cell = row.insertCell();
             cell.className = "metadata";
-            cell.textContent = "—";
+            cell.textContent = value;
         }
 
         const download = document.createElement("a");
-        download.className = "text-action download-action";
+        download.className = "row-action download-action";
         download.href = "/api/files/" + encodeURIComponent(file.id);
         download.download = "";
-        download.append(icon("download"), "下载");
+        download.append(icon("download"));
+        download.title = "下载";
+        download.addEventListener("click", selectRow);
         download.setAttribute("aria-label", "下载 " + file.name);
-        row.insertCell().append(download);
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "row-action delete-action";
+        remove.append(icon("delete"));
+        remove.setAttribute("aria-label", "删除 " + file.name);
+        remove.title = account ? "删除" : "登录后可删除本组文件";
+        remove.disabled = !account || refreshButton.disabled;
+        remove.addEventListener("click", () => {
+            selectRow();
+            openDeleteDialog(file);
+        });
+        const actions = document.createElement("div");
+        actions.className = "row-actions";
+        actions.append(download, remove);
+        nameContent.append(actions);
         rows.append(row);
     }
 
@@ -128,16 +291,24 @@ function showFiles(files) {
     fileCount.textContent = files.length + " 个文件";
     tableContainer.hidden = files.length === 0;
     emptyState.hidden = files.length !== 0;
+    tableContainer.scrollTop = 0;
+    updateFileListHeight();
 }
 
 function clearFiles() {
+    displayedFiles = [];
+    selectedFileIds.clear();
     fileRows.replaceChildren();
+    updateFileListHeight();
     fileCount.textContent = "";
     tableContainer.hidden = true;
     emptyState.hidden = true;
 }
 
 function setAccount(identity) {
+    if (account?.username !== identity?.username || account?.group !== identity?.group) {
+        selectedFileIds.clear();
+    }
     account = identity;
     accountLabel.textContent = account?.username || "游客";
     accountLabel.title = accountLabel.textContent;
@@ -263,7 +434,90 @@ function showFileMessage(message, isError = false) {
 function setFilesBusy(busy) {
     refreshButton.disabled = busy;
     uploadButton.disabled = busy && Boolean(account);
+    for (const button of fileRows.querySelectorAll(".delete-action")) {
+        button.disabled = busy || !account;
+    }
+    for (const button of sortButtons) button.disabled = busy;
 }
+
+function openDeleteDialog(file) {
+    if (refreshButton.disabled || deleting) return;
+    deleteTarget = file;
+    deleteFileName.textContent = file.name;
+    deleteError.hidden = true;
+    deleteDialog.showModal();
+    deleteCancel.focus();
+}
+
+function closeDeleteDialog() {
+    if (!deleting) deleteDialog.close();
+}
+
+deleteCancel.addEventListener("click", closeDeleteDialog);
+deleteClose.addEventListener("click", closeDeleteDialog);
+deleteDialog.addEventListener("cancel", event => {
+    if (deleting) event.preventDefault();
+});
+deleteDialog.addEventListener("close", () => {
+    deleteTarget = null;
+});
+
+deleteConfirm.addEventListener("click", async () => {
+    if (!deleteTarget || deleting) return;
+    const target = deleteTarget;
+    deleting = true;
+    deleteError.hidden = true;
+    deleteConfirm.disabled = true;
+    deleteCancel.disabled = true;
+    deleteClose.disabled = true;
+    deleteConfirm.textContent = "正在删除…";
+    pendingList?.abort();
+    setFilesBusy(true);
+    try {
+        let response;
+        try {
+            response = await fetch("/api/files/" + encodeURIComponent(target.id), {
+                method: "DELETE",
+                mode: "same-origin"
+            });
+        } catch {
+            throw new Error("删除连接中断，无法确认结果。请取消后刷新列表查看。");
+        }
+        if (response.status === 401) {
+            deleteDialog.close();
+            expireSession();
+            return;
+        }
+        if (response.status === 404) {
+            throw new Error("文件不存在或当前账号无权删除。");
+        }
+        if (response.status !== 204) {
+            throw new Error("删除失败（HTTP " + response.status + "），请稍后重试。");
+        }
+        selectedFileIds.delete(target.id);
+        deleteDialog.close();
+        const confirmation = "已删除 " + target.name + "。";
+        showFileMessage(confirmation + " 正在刷新列表…");
+        try {
+            if (await refreshFiles(confirmation + " ")) {
+                showFileMessage(confirmation);
+                filesPanel.focus();
+            }
+        } catch (error) {
+            showFileMessage(confirmation + " " + error.message, true);
+        }
+    } catch (error) {
+        deleteError.textContent = error.message;
+        deleteError.hidden = false;
+    } finally {
+        deleting = false;
+        deleteConfirm.disabled = false;
+        deleteCancel.disabled = false;
+        deleteClose.disabled = false;
+        deleteConfirm.textContent = "确认删除";
+        setFilesBusy(false);
+    }
+});
 
 function expireSession(message = "") {
     setAccount(null);
