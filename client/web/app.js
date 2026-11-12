@@ -20,7 +20,18 @@ const uploadButton = document.getElementById("upload-button");
 const uploadInput = document.getElementById("upload-input");
 const filesStatus = document.getElementById("files-status");
 const filesError = document.getElementById("files-error");
-const uploadProgress = document.getElementById("upload-progress");
+const taskUploadButton = document.getElementById("task-upload-button");
+const fileLayout = document.getElementById("file-layout");
+const uploadsPanel = document.getElementById("uploads-panel");
+const downloadsPanel = document.getElementById("downloads-panel");
+const filePageLinks = document.querySelectorAll("[data-file-page]");
+const uploadTaskList = document.getElementById("upload-task-list");
+const uploadsEmpty = document.getElementById("uploads-empty");
+const uploadsActive = document.getElementById("uploads-active");
+const uploadsFinished = document.getElementById("uploads-finished");
+const uploadTasks = [];
+let uploadFilter = "active";
+let activeUploadTask = null;
 const groupLabel = document.getElementById("group-label");
 const loginLink = document.getElementById("login-link");
 const fileNavigation = document.getElementById("file-navigation");
@@ -308,6 +319,7 @@ function clearFiles() {
 function setAccount(identity) {
     if (account?.username !== identity?.username || account?.group !== identity?.group) {
         selectedFileIds.clear();
+        clearUploadTasks();
     }
     account = identity;
     accountLabel.textContent = account?.username || "游客";
@@ -317,6 +329,7 @@ function setAccount(identity) {
     groupLabel.title = groupLabel.textContent;
     loginLink.hidden = Boolean(account);
     uploadButton.disabled = refreshButton.disabled && Boolean(account);
+    taskUploadButton.disabled = uploadButton.disabled;
     filesPanel.setAttribute("aria-label", account ? "本组文件与公共文件" : "公共文件");
     document.getElementById("empty-description").textContent = account
         ? "当前没有可下载的文件。" : "当前没有可下载的公共文件。";
@@ -330,18 +343,30 @@ function showPassword(visible) {
 
 function showView(focus = false) {
     const signingIn = serverReady && location.hash === "#login" && !account;
+    const page = location.hash === "#uploads" ? "uploads"
+        : location.hash === "#downloads" ? "downloads" : "home";
+    const showFilesApp = serverReady && !signingIn;
     discoveryPanel.hidden = serverReady;
     loginPanel.hidden = !signingIn;
     backLink.hidden = !signingIn;
     fileNavigation.hidden = signingIn || !serverReady;
-    filesPanel.hidden = signingIn || !serverReady;
+    fileLayout.hidden = !showFilesApp;
+    filesPanel.hidden = !showFilesApp || page !== "home";
+    uploadsPanel.hidden = !showFilesApp || page !== "uploads";
+    downloadsPanel.hidden = !showFilesApp || page !== "downloads";
+    for (const link of filePageLinks) {
+        if (link.dataset.filePage === page) link.setAttribute("aria-current", "page");
+        else link.removeAttribute("aria-current");
+    }
     if (!signingIn && !loginButton.disabled) {
         passwordInput.value = "";
         showPassword(false);
         loginError.hidden = true;
     }
     if (focus) {
-        (serverReady ? (signingIn ? usernameInput : filesPanel) : discoveryTitle).focus();
+        const pagePanel = page === "uploads" ? uploadsPanel
+            : page === "downloads" ? downloadsPanel : filesPanel;
+        (serverReady ? (signingIn ? usernameInput : pagePanel) : discoveryTitle).focus();
     }
 }
 
@@ -406,6 +431,7 @@ loginForm.addEventListener("submit", async (event) => {
             throw new Error("登录响应缺少账号身份。");
         }
         pendingList?.abort();
+        clearUploadTasks();
         setAccount(listing.account);
         loginForm.reset();
         showPassword(false);
@@ -434,6 +460,7 @@ function showFileMessage(message, isError = false) {
 function setFilesBusy(busy) {
     refreshButton.disabled = busy;
     uploadButton.disabled = busy && Boolean(account);
+    taskUploadButton.disabled = uploadButton.disabled;
     for (const button of fileRows.querySelectorAll(".delete-action")) {
         button.disabled = busy || !account;
     }
@@ -675,32 +702,180 @@ async function connectServer(confirm = false, startup = false) {
 discoveryRetry.addEventListener("click", () => connectServer());
 discoveryTrust.addEventListener("click", () => connectServer(true));
 refreshButton.addEventListener("click", () => connectServer());
-uploadButton.addEventListener("click", () => {
+function chooseUpload() {
     if (account) {
         uploadInput.click();
     } else {
         location.hash = "login";
     }
+}
+uploadButton.addEventListener("click", chooseUpload);
+taskUploadButton.addEventListener("click", chooseUpload);
+
+function clearUploadTasks() {
+    for (const task of uploadTasks) {
+        task.discarded = true;
+        clearTimeout(task.pollTimer);
+        task.pollController?.abort();
+        task.request?.abort();
+    }
+    uploadTasks.length = 0;
+    if (activeUploadTask) {
+        activeUploadTask = null;
+        setFilesBusy(discoveryBusy || deleting);
+    }
+    renderUploadTasks();
+}
+
+function renderUploadTasks() {
+    const active = uploadTasks.filter(task => !task.finished).length;
+    const finished = uploadTasks.length - active;
+    document.getElementById("uploads-active-count").textContent = active;
+    document.getElementById("uploads-finished-count").textContent = finished;
+    const badge = document.getElementById("upload-nav-count");
+    badge.textContent = active;
+    badge.hidden = active === 0;
+    uploadsActive.setAttribute("aria-pressed", String(uploadFilter === "active"));
+    uploadsFinished.setAttribute("aria-pressed", String(uploadFilter === "finished"));
+    document.getElementById("upload-summary").textContent = uploadFilter === "active"
+        ? (active ? active + " 个上传任务正在进行" : "暂无进行中的上传任务")
+        : finished + " 个已结束的上传任务";
+    const visibleTasks = uploadTasks.filter(task => task.finished === (uploadFilter === "finished"));
+    uploadsEmpty.hidden = visibleTasks.length !== 0;
+    const rows = document.createDocumentFragment();
+    const labels = {
+        preparing: "正在准备上传",
+        running: "正在上传",
+        confirming: "正在等待服务器确认",
+        success: "上传成功",
+        failed: "上传失败",
+        unknown: "结果待确认"
+    };
+    for (const task of [...visibleTasks].reverse()) {
+        const row = document.createElement("article");
+        row.className = "upload-task";
+        row.dataset.state = task.state;
+        row.setAttribute("role", "listitem");
+        const nameGroup = document.createElement("div");
+        nameGroup.className = "task-name-group";
+        const badge = document.createElement("span");
+        badge.className = "file-icon";
+        badge.append(icon("file"));
+        const nameText = document.createElement("div");
+        nameText.className = "task-name-text";
+        const name = document.createElement("p");
+        name.className = "task-name";
+        name.textContent = task.name;
+        name.title = task.name;
+        const message = document.createElement("p");
+        message.className = "task-message";
+        message.textContent = task.message || task.notice || labels[task.state];
+        nameText.append(name, message);
+        nameGroup.append(badge, nameText);
+        const progressGroup = document.createElement("div");
+        progressGroup.className = "task-progress-group";
+        const progress = document.createElement("progress");
+        progress.className = "task-progress";
+        progress.max = 1000;
+        progress.setAttribute("aria-label", task.name + " 上传进度");
+        const percent = task.total > 0n
+            ? Number(task.sent * 1000n / task.total) : task.state === "success" ? 1000 : 0;
+        if (task.state !== "preparing") progress.value = Math.min(percent, 1000);
+        const bytes = document.createElement("p");
+        bytes.className = "task-bytes";
+        bytes.textContent = formatFileSize(task.sent) + " / " + formatFileSize(task.total)
+            + " · " + (Math.min(percent, 1000) / 10).toFixed(1) + "%";
+        progressGroup.append(progress, bytes);
+        const speed = document.createElement("p");
+        speed.className = "task-speed";
+        speed.textContent = task.state === "running"
+            ? formatFileSize(BigInt(Math.max(0, Math.round(task.speed)))) + "/s" : "—";
+        const elapsed = Math.max(0, Math.floor(((task.endedAt || Date.now()) - task.startedAt) / 1000));
+        const time = document.createElement("p");
+        time.className = "task-time";
+        time.title = "已用时间";
+        time.textContent = [Math.floor(elapsed / 3600), Math.floor(elapsed / 60) % 60, elapsed % 60]
+            .map(value => String(value).padStart(2, "0")).join(":");
+        row.append(nameGroup, progressGroup, speed, time);
+        rows.append(row);
+    }
+    uploadTaskList.replaceChildren(rows);
+}
+
+uploadsActive.addEventListener("click", () => {
+    uploadFilter = "active";
+    renderUploadTasks();
+});
+uploadsFinished.addEventListener("click", () => {
+    uploadFilter = "finished";
+    renderUploadTasks();
 });
 
-function sendFile(file) {
+function finishUploadTask(task, state, message) {
+    task.state = state;
+    task.message = message;
+    task.finished = true;
+    task.endedAt = Date.now();
+    clearTimeout(task.pollTimer);
+    task.pollController?.abort();
+    task.request = null;
+    if (!task.discarded) {
+        uploadFilter = "finished";
+        renderUploadTasks();
+    }
+}
+
+async function pollUploadTask(task) {
+    if (task.finished || task.discarded) return;
+    const controller = new AbortController();
+    task.pollController = controller;
+    try {
+        const response = await fetch("/api/task/" + encodeURIComponent(task.id), {
+            cache: "no-store",
+            mode: "same-origin",
+            signal: controller.signal
+        });
+        if (response.status !== 200) throw new Error("进度暂时不可用，上传仍在继续。");
+        const snapshot = await response.json();
+        const validBytes = value => typeof value === "string" && /^\d{1,20}$/.test(value);
+        if (snapshot?.task_id !== task.id || !validBytes(snapshot.sent_bytes) ||
+            !validBytes(snapshot.total_bytes) ||
+            !["restart", "running", "confirming", "success", "failed"].includes(snapshot.state)) {
+            throw new Error("进度数据暂时不可用，上传仍在继续。");
+        }
+        if (task.finished || task.discarded) return;
+        const sent = BigInt(snapshot.sent_bytes);
+        const total = BigInt(snapshot.total_bytes);
+        if (sent > total) throw new Error("进度数据暂时不可用，上传仍在继续。");
+        const now = performance.now();
+        task.speed = Number(sent - task.sent) * 1000 / Math.max(1, now - task.sampledAt);
+        task.sampledAt = now;
+        task.sent = sent;
+        if (snapshot.state !== "restart") task.total = total;
+        task.state = snapshot.state === "restart" ? "preparing"
+            : snapshot.state === "running" ? "running" : "confirming";
+        task.notice = snapshot.state === "failed" ? "服务器报告失败，正在获取请求结果。" : "";
+    } catch (error) {
+        if (controller.signal.aborted || task.finished || task.discarded) return;
+        task.notice = error.message || "暂时无法读取进度，上传仍在继续。";
+    } finally {
+        if (!task.finished && !task.discarded) {
+            renderUploadTasks();
+            task.pollTimer = setTimeout(() => pollUploadTask(task), 400);
+        }
+    }
+}
+
+function sendFile(file, task) {
     return new Promise((resolve, reject) => {
         const request = new XMLHttpRequest();
-        const query = new URLSearchParams({ name: file.name });
+        task.request = request;
+        const query = new URLSearchParams({ name: file.name, task_id: task.id });
         request.open("POST", "/api/files?" + query);
         request.setRequestHeader("Content-Type", "application/octet-stream");
-        request.upload.addEventListener("progress", (event) => {
-            if (event.lengthComputable && event.total > 0) {
-                uploadProgress.max = event.total;
-                uploadProgress.value = event.loaded;
-            }
-        });
-        request.upload.addEventListener("load", () => {
-            uploadProgress.removeAttribute("value");
-            showFileMessage("文件已发送，等待网盘服务端确认…");
-        });
         request.addEventListener("load", () => resolve(request));
         request.addEventListener("error", () => reject(new Error("上传连接中断，无法确认结果。请刷新列表查看文件是否已上传。")));
+        request.addEventListener("abort", () => reject(new Error("上传连接已结束，无法确认结果。")));
         request.send(file);
     });
 }
@@ -721,14 +896,52 @@ uploadInput.addEventListener("change", async () => {
         return;
     }
 
+    const task = {
+        name: file.name,
+        id: "",
+        total: BigInt(file.size),
+        sent: 0n,
+        speed: 0,
+        sampledAt: performance.now(),
+        startedAt: Date.now(),
+        state: "preparing",
+        finished: false,
+        discarded: false,
+        message: "",
+        notice: ""
+    };
+    uploadTasks.push(task);
+    activeUploadTask = task;
+    uploadFilter = "active";
+    renderUploadTasks();
+    location.hash = "uploads";
     setFilesBusy(true);
     showFileMessage("正在上传 " + file.name + "…");
-    uploadProgress.removeAttribute("value");
-    uploadProgress.hidden = false;
+    let failureState = "failed";
 
     try {
-        const response = await sendFile(file);
-        uploadProgress.hidden = true;
+        const created = await fetch("/api/task/", {
+            method: "POST",
+            mode: "same-origin"
+        });
+        if (task.discarded) return;
+        if (created.status === 401) {
+            expireSession();
+            return;
+        }
+        if (created.status !== 200) {
+            throw new Error("创建上传任务失败（HTTP " + created.status + "）。");
+        }
+        task.id = (await created.text()).trim();
+        if (task.discarded) return;
+        if (!/^[0-9a-f]{64}$/.test(task.id)) {
+            throw new Error("客户端返回的上传任务编号无效。");
+        }
+        pollUploadTask(task);
+        failureState = "unknown";
+        const response = await sendFile(file, task);
+        if (task.discarded) return;
+        failureState = "failed";
         if (response.status === 401) {
             expireSession();
             return;
@@ -742,6 +955,8 @@ uploadInput.addEventListener("change", async () => {
 
         const id = readUploadId(response.responseText);
         const confirmation = id ? "上传成功，文件编号 " + id + "。" : "服务端已确认上传。";
+        task.sent = task.total;
+        finishUploadTask(task, "success", confirmation);
         showFileMessage(confirmation + " 正在刷新列表…");
         try {
             if (await refreshFiles(confirmation + " ")) {
@@ -751,12 +966,19 @@ uploadInput.addEventListener("change", async () => {
             showFileMessage(confirmation + " " + error.message, true);
         }
     } catch (error) {
-        showFileMessage(error.message, true);
+        if (task.discarded) return;
+        const message = error.message || "上传失败，请稍后重试。";
+        finishUploadTask(task, failureState, message);
+        showFileMessage(message, true);
     } finally {
-        uploadProgress.hidden = true;
-        setFilesBusy(false);
+        task.request = null;
+        if (activeUploadTask === task) {
+            activeUploadTask = null;
+            setFilesBusy(false);
+        }
     }
 });
 
+renderUploadTasks();
 showView(location.hash === "#login");
 connectServer(false, true);

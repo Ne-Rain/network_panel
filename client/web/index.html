@@ -5,12 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
     <title>NetPanel 局域网文件</title>
-    <link rel="stylesheet" href="./style.css?v=single-selection-1">
-    <script src="./app.js?v=single-selection-1" defer></script>
+    <link rel="stylesheet" href="./style.css?v=upload-tasks-1">
+    <script src="./app.js?v=upload-tasks-1" defer></script>
 </head>
 <body>
     <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
         <symbol id="icon-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+        <symbol id="icon-home" viewBox="0 0 24 24"><path d="m3 10 9-7 9 7v11h-6v-7H9v7H3z"/></symbol>
         <symbol id="icon-person" viewBox="0 0 24 24"><circle cx="12" cy="7" r="3.5"/><path d="M4 21v-2a5 5 0 0 1 5-5h6a5 5 0 0 1 5 5v2z"/></symbol>
         <symbol id="icon-upload" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></symbol>
         <symbol id="icon-download" viewBox="0 0 24 24"><path d="M12 3v13m-5-5 5 5 5-5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></symbol>
@@ -62,6 +63,20 @@
             </div>
         </section>
 
+        <div id="file-layout" class="file-layout" hidden>
+            <nav class="sidebar" aria-label="文件导航">
+                <a class="sidebar-link" href="#home" data-file-page="home" aria-current="page">
+                    <svg class="icon" aria-hidden="true"><use href="#icon-home"/></svg>首页
+                </a>
+                <a class="sidebar-link" href="#uploads" data-file-page="uploads">
+                    <svg class="icon" aria-hidden="true"><use href="#icon-upload"/></svg>上传
+                    <span id="upload-nav-count" class="nav-count" hidden></span>
+                </a>
+                <a class="sidebar-link" href="#downloads" data-file-page="downloads">
+                    <svg class="icon" aria-hidden="true"><use href="#icon-download"/></svg>下载
+                </a>
+            </nav>
+            <div class="file-content">
         <section id="files-panel" class="workspace" aria-label="公共文件" tabindex="-1" hidden>
             <div class="file-toolbar">
                 <span id="file-count" class="count" aria-live="polite"></span>
@@ -111,11 +126,39 @@
                 <p id="empty-description">当前没有可下载的公共文件。</p>
             </div>
             <div class="file-feedback">
-                <progress id="upload-progress" aria-label="上传进度" hidden></progress>
                 <p id="files-status" class="message" role="status" hidden></p>
                 <p id="files-error" class="message error-message" role="alert" hidden></p>
             </div>
         </section>
+        <section id="uploads-panel" class="workspace transfer-panel" aria-labelledby="uploads-title" tabindex="-1" hidden>
+            <h1 id="uploads-title">上传任务</h1>
+            <div class="transfer-toolbar">
+                <div class="transfer-filters" role="group" aria-label="上传任务筛选">
+                    <button id="uploads-active" class="transfer-filter" type="button" aria-pressed="true">进行中 <span id="uploads-active-count">0</span></button>
+                    <button id="uploads-finished" class="transfer-filter" type="button" aria-pressed="false">已结束 <span id="uploads-finished-count">0</span></button>
+                </div>
+                <button id="task-upload-button" class="button button-primary" type="button">
+                    <svg class="icon" aria-hidden="true"><use href="#icon-upload"/></svg>上传文件
+                </button>
+            </div>
+            <p id="upload-summary" class="transfer-summary" role="status">暂无进行中的上传任务</p>
+            <div id="upload-task-list" class="transfer-list" role="list" aria-label="上传任务列表"></div>
+            <div id="uploads-empty" class="empty-state">
+                <svg class="icon" aria-hidden="true"><use href="#icon-upload"/></svg>
+                <h2>暂无上传任务</h2>
+                <p>选择文件后，可在这里查看上传进度。</p>
+            </div>
+        </section>
+        <section id="downloads-panel" class="workspace transfer-panel" aria-labelledby="downloads-title" tabindex="-1" hidden>
+            <h1 id="downloads-title">下载任务</h1>
+            <div class="empty-state download-placeholder">
+                <svg class="icon" aria-hidden="true"><use href="#icon-download"/></svg>
+                <h2>下载任务</h2>
+                <p>下载任务将在这里显示。</p>
+            </div>
+        </section>
+            </div>
+        </div>
 
         <section id="login-panel" class="login-page" aria-labelledby="login-title" hidden>
             <div class="login-card">

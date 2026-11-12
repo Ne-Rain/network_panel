@@ -2,6 +2,7 @@
 #define NETPANEL_DEVICE_DISCOVERY_HPP
 
 #include <atomic>
+#include <cstdint>
 #include <string>
 #include <thread>
 #include <vector>
@@ -24,7 +25,11 @@ public:
 private:
     void respond(const std::string& endpoint);
 
+#ifdef _WIN32
+    std::uintptr_t socket_ = ~std::uintptr_t{0};
+#else
     int socket_ = -1;
+#endif
     std::atomic<bool> stopping_{false};
     std::thread worker_;
 };

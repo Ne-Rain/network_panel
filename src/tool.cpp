@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <limits>
 #include <openssl/evp.h>
+#include <openssl/rand.h>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -71,4 +72,20 @@ std::string make_local_time() {
     std::ostringstream out;
     out << std::put_time(&local_time, "%y/%m/%d %H:%M");
     return out.str();
+}
+
+std::string make_rand_id() {
+    unsigned char bytes[32];
+    if (RAND_bytes(bytes, sizeof(bytes)) != 1) {
+        return {};
+    }
+
+    const char* hex = "0123456789abcdef";
+    std::string id;
+    id.reserve(64);
+    for (unsigned char byte : bytes) {
+        id += hex[byte >> 4];
+        id += hex[byte & 0x0f];
+    }
+    return id;
 }

@@ -122,6 +122,92 @@ button:disabled { cursor: wait; opacity: .55; }
     background: var(--subtle);
 }
 .workspace, .login-page { padding-block: var(--page-padding) 48px; }
+.file-layout {
+    display: grid;
+    grid-template-columns: 150px minmax(0, 1fr);
+    gap: 24px;
+    width: var(--page-width);
+    margin-inline: auto;
+}
+.file-content { min-width: 0; }
+.file-content > .workspace { width: 100%; margin: 0; }
+#files-panel:focus, .transfer-panel:focus { outline: none; }
+.sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-self: start;
+    position: sticky;
+    top: 24px;
+    padding-top: var(--page-padding);
+}
+.sidebar-link {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 46px;
+    padding: 10px 14px;
+    border-radius: 9px;
+    color: var(--muted);
+}
+.sidebar-link:hover { background: #ffffff80; }
+.sidebar-link[aria-current="page"] { background: var(--surface); color: var(--ink); font-weight: 650; }
+.nav-count { margin-inline-start: auto; font-size: 12px; font-variant-numeric: tabular-nums; }
+.transfer-panel h1 { font-size: 24px; margin-bottom: 22px; }
+.transfer-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.transfer-filters { display: flex; gap: 22px; }
+.transfer-filter {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 10px 0;
+    background: transparent;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    color: var(--muted);
+    font-weight: 650;
+    cursor: pointer;
+}
+.transfer-filter[aria-pressed="true"] { color: var(--ink); border-bottom-color: var(--ink); }
+.transfer-filter span { color: #929292; font-size: 13px; }
+.transfer-summary { margin: 18px 0; color: var(--muted); font-size: 14px; }
+.transfer-list { display: grid; gap: 12px; }
+.upload-task {
+    display: grid;
+    grid-template-columns: minmax(150px, 1fr) minmax(160px, 240px) 90px 80px;
+    align-items: center;
+    gap: 20px;
+    padding: 22px 18px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--panel-radius);
+}
+.task-name-group { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.task-name-text { min-width: 0; }
+.task-name { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-message { margin-top: 5px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.task-progress-group { min-width: 0; }
+.task-bytes { margin-top: 7px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.task-progress { display: block; width: 100%; height: 5px; accent-color: var(--ink); }
+.task-speed, .task-time { font-size: 13px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.task-time { text-align: end; }
+.upload-task[data-state="failed"] .task-message { color: #ba3737; }
+.upload-task[data-state="success"] .task-message { color: #34734d; }
+#uploads-empty > .icon, .download-placeholder > .icon { width: 32px; height: 32px; margin-bottom: 14px; color: #929292; }
+.download-placeholder { margin-top: 22px; }
+@media (max-width: 760px) {
+    .file-layout { display: block; }
+    .sidebar { flex-direction: row; position: static; padding-top: 16px; gap: 6px; }
+    .sidebar-link { flex: 1; justify-content: center; gap: 8px; padding: 8px; }
+    .nav-count { margin-inline-start: 0; }
+    .transfer-toolbar { align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+    .transfer-filters { gap: 18px; }
+    .transfer-toolbar .button { min-height: 36px; padding: 6px 10px; font-size: 14px; }
+    .upload-task { grid-template-columns: minmax(0, 1fr) auto; gap: 16px; padding: 18px 14px; }
+    .task-name-group, .task-progress-group { grid-column: 1 / -1; }
+    .task-speed { grid-column: 1; }
+    .task-time { grid-column: 2; }
+}
 h1, h2, p { margin: 0; }
 h1 { font-size: clamp(24px, 4vw, 32px); line-height: 1.25; letter-spacing: -.025em; }
 .discovery-banner p, .login-description { margin-top: 8px; color: var(--muted); line-height: 1.55; }

@@ -1,3 +1,6 @@
+#include "task_record.hpp"
+#include <cstddef>
+#include <mutex>
 #include <sstream>
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include <cerrno>
@@ -17,6 +20,7 @@
 #include "device_discovery.hpp"
 #include "device_identity.hpp"
 #include "httplib.h"
+#include "tool.h"
 
 static constexpr int local_port = 8080;
 
@@ -33,6 +37,7 @@ static void verify_remote_peer(httplib::SSLClient& client,
 
 using SessionClock = std::chrono::steady_clock;
 struct Session {
+    std::string session_id;
     std::string username;
     std::string password;
     std::string group = "PUBLIC";
@@ -41,23 +46,6 @@ struct Session {
 };
 static std::unordered_map<std::string, Session> sessions;
 static std::mutex sessions_mtx;
-
-// 使用RAND_bytes为会话生成唯一Cookie编号
-static std::string make_session_id() {
-    unsigned char bytes[32];
-    if (RAND_bytes(bytes, sizeof(bytes)) != 1) {
-        return {};
-    }
-
-    const char* hex = "0123456789abcdef";
-    std::string id;
-    id.reserve(64);
-    for (unsigned char byte : bytes) {
-        id += hex[byte >> 4];
-        id += hex[byte & 0x0f];
-    }
-    return id;
-}
 
 enum class SessionState { Missing, Invalid, Valid };
 // 获取当前会话Cookie
@@ -304,13 +292,13 @@ void handle_login(const httplib::Request& req, httplib::Response& res, const Rem
         res.status = 502;
         return;
     }
-    const auto id = make_session_id();
+    const auto id = make_rand_id();
     if (id.empty()) {
         res.status = 500;
         return;
     }
     const auto expires_at = SessionClock::now() + std::chrono::hours(1);
-    const Session session{username, password, group, expires_at, target.fingerprint};
+    const Session session{id, username, password, group, expires_at, target.fingerprint};
 
     std::string json;
     json = "{\"username\":";
@@ -416,8 +404,12 @@ void handle_download(const httplib::Request& req,
 // 上传接口
 void handle_upload(const httplib::Request& req,
                    httplib::Response& res,
-                   const RemoteTarget& target) {
+                   const httplib::ContentReader& reader,
+                   const RemoteTarget& target,
+                   std::unordered_map<std::string, TaskRecord>& task_set,
+                   std::mutex& task_mtx) {
     const auto filename = req.get_param_value("name");
+    const auto task_id = req.get_param_value("task_id");
     httplib::SSLClient client(target.host, target.port);
     verify_remote_peer(client, target.fingerprint);
     Session session;
@@ -432,19 +424,80 @@ void handle_upload(const httplib::Request& req,
     }
 
     client.set_basic_auth(session.username, session.password);
-    auto result = client.Post("/files?name=" + filename, req.body, "application/octet-stream");
-    if (!result) {
-        res.status = 502;
+    std::size_t content_length = 0;
+    if (!string_to_size_t(req.get_header_value("Content-Length"), content_length)) {
+        res.status = 400;
         return;
     }
-    if (result->status == 401) {
-        res.status = 401;
+    std::unique_lock<std::mutex> lock(task_mtx);
+    auto it = task_set.find(task_id);
+    if (it == task_set.end() || it->second.owner_session_id != session.session_id) {
+        res.status = 404;
         return;
     }
-    res.status = result->status;
-    if (result->status != 201) {
+    if (it->second.state != TaskState::Restart) {
+        res.status = 409;
         return;
     }
+    it->second.total_bytes = content_length;
+    it->second.state = TaskState::Running;
+    lock.unlock();
+
+    bool body_consumed = false;
+
+    // 分块持续发送
+    httplib::ContentProvider provider = [&](std::size_t offset,
+                                            std::size_t remaining,
+                                            httplib::DataSink& sink) {
+        if (body_consumed || offset != 0 || remaining != content_length) {
+            return false;
+        }
+        body_consumed = true;
+        return reader([&](const char* data, std::size_t size) { return sink.write(data, size); });
+    };
+    auto progress = [&](std::size_t current, std::size_t total) {
+        std::lock_guard<std::mutex> lock(task_mtx);
+        auto it = task_set.find(task_id);
+        if (it == task_set.end()) {
+            return false;
+        }
+        it->second.sent_bytes = current;
+        if (current == total) {
+            it->second.state = TaskState::Confirming;
+        }
+        return true;
+    };
+    auto result = client.Post("/files?name=" + filename,
+                              content_length,
+                              provider,
+                              "application/octet-stream",
+                              progress);
+
+    {
+        std::lock_guard<std::mutex> lk(task_mtx);
+        auto task_it = task_set.find(task_id);
+        if (task_it == task_set.end() || it->second.owner_session_id != session.session_id) {
+            res.status = 404;
+            return;
+        }
+        if (!result) {
+            res.status = 502;
+            task_it->second.state = TaskState::Failed;
+            return;
+        }
+        if (result->status == 401) {
+            res.status = 401;
+            task_it->second.state = TaskState::Failed;
+            return;
+        }
+        res.status = result->status;
+        if (result->status != 201) {
+            task_it->second.state = TaskState::Failed;
+            return;
+        }
+        task_it->second.state = TaskState::Success;
+    }
+
     std::istringstream input(result->body);
     std::string json = "";
     bool first = true;
@@ -460,8 +513,10 @@ void handle_upload(const httplib::Request& req,
         first = false;
         json += "{\"id\":";
         append_json_string(json, id);
-        json += '}';
+        json += ",\"task_id\":";
+        append_json_string(json, task_id);
     }
+    json += '}';
     res.set_content(json, "application/json");
 }
 
@@ -492,6 +547,89 @@ void handle_delete(const httplib::Request& req,
         return;
     }
 }
+
+void handle_task(const httplib::Request& req,
+                 httplib::Response& res,
+                 const RemoteTarget& target,
+                 std::unordered_map<std::string, TaskRecord>& task_set,
+                 std::mutex& task_mtx) {
+    httplib::SSLClient client(target.host, target.port);
+    verify_remote_peer(client, target.fingerprint);
+    Session session;
+    const auto state = load_session(req, session, target.fingerprint);
+    if (state != SessionState::Valid) {
+        if (state == SessionState::Invalid) {
+            clear_session_cookie(res);
+        }
+        res.status = 401;
+        return;
+    }
+    client.set_basic_auth(session.username, session.password);
+    TaskRecord record{};
+    record.owner_session_id = session.session_id;
+    auto create_record_id_time = std::chrono::steady_clock::now();
+    std::unique_lock<std::mutex> lock(task_mtx);
+    while (true) {
+        std::string tmp_id = make_rand_id();
+        if (task_set.find(tmp_id) == task_set.end()) {
+            record.task_id = tmp_id;
+            task_set.emplace(tmp_id, record);
+            break;
+        }
+        // 设置2s创建任务期限
+        if (std::chrono::steady_clock::now() - create_record_id_time > std::chrono::seconds(2)) {
+            res.status = 402;
+            return;
+        }
+    }
+    lock.unlock();
+    res.status = 200;
+    res.set_content(record.task_id, "application/octet-stream");
+}
+
+void handle_task_state(const httplib::Request& req,
+                       httplib::Response& res,
+                       const RemoteTarget& target,
+                       std::unordered_map<std::string, TaskRecord>& task_set,
+                       std::mutex& task_mtx) {
+    httplib::SSLClient client(target.host, target.port);
+    verify_remote_peer(client, target.fingerprint);
+    Session session;
+    const auto state = load_session(req, session, target.fingerprint);
+    if (state != SessionState::Valid) {
+        if (state == SessionState::Invalid) {
+            clear_session_cookie(res);
+        }
+        res.status = 401;
+        return;
+    }
+    std::string task_id = req.matches[1].str();
+    std::size_t sent_bytes;
+    std::size_t total_bytes;
+    TaskState task_state;
+    {
+        std::lock_guard<std::mutex> lock(task_mtx);
+        auto it = task_set.find(task_id);
+        if (it == task_set.end() || it->second.owner_session_id != session.session_id) {
+            res.status = 404;
+            return;
+        }
+        sent_bytes = it->second.sent_bytes;
+        total_bytes = it->second.total_bytes;
+        task_state = it->second.state;
+    }
+    std::string json = "{\"task_id\":";
+    append_json_string(json, task_id);
+    json += ",\"sent_bytes\":";
+    append_json_string(json, std::to_string(sent_bytes));
+    json += ",\"total_bytes\":";
+    append_json_string(json, std::to_string(total_bytes));
+    json += ",\"state\":";
+    append_json_string(json, state_to_string(task_state));
+    json += "}";
+    res.status = 200;
+    res.set_content(json, "application/json");
+}
 } // namespace
 
 int main() {
@@ -507,10 +645,14 @@ int main() {
 
     LocalDiscovery discovery(trusted_fingerprint);
     httplib::Server local;
+    local.set_payload_max_length(std::size_t{5} * 1024 * 1024 * 1024 * 1024);
     if (!local.set_mount_point("/", "./client/web")) {
         std::cerr << "Failed to find webpage\n";
     }
     std::cout << "http://127.0.0.1:" << local_port << "/\n";
+
+    std::unordered_map<std::string, TaskRecord> task_set; // 任务编号集合
+    std::mutex task_mtx;
 
     local.Post("/api/discover", [&](const httplib::Request& req, httplib::Response& res) {
         if (!is_local_browser(req)) {
@@ -540,9 +682,38 @@ int main() {
     local.Post("/api/login", with_target(handle_login));
     local.Get("/api/files", with_target(handle_files));
     local.Get("/api/files/([0-9]+)", with_target(handle_download));
-    local.Post("/api/files", with_target(handle_upload));
     local.Delete("/api/files/([0-9]+)", with_target(handle_delete));
-
+    local.Post("/api/files",
+               [&discovery, &task_set, &task_mtx](const httplib::Request& req,
+                                                  httplib::Response& res,
+                                                  const httplib::ContentReader& reader) {
+                   RemoteTarget target{};
+                   if (!discovery.target(target)) {
+                       res.status = 503;
+                       return;
+                   }
+                   handle_upload(req, res, reader, target, task_set, task_mtx);
+               });
+    local.Post(
+        "/api/task/",
+        [&discovery, &task_set, &task_mtx](const httplib::Request& req, httplib::Response& res) {
+            RemoteTarget target{};
+            if (!discovery.target(target)) {
+                res.status = 503;
+                return;
+            }
+            handle_task(req, res, target, task_set, task_mtx);
+        });
+    local.Get(
+        "/api/task/([0-9a-f]{64})",
+        [&discovery, &task_set, &task_mtx](const httplib::Request& req, httplib::Response& res) {
+            RemoteTarget target{};
+            if (!discovery.target(target)) {
+                res.status = 503;
+                return;
+            }
+            handle_task_state(req, res, target, task_set, task_mtx);
+        });
     if (!local.listen("127.0.0.1", local_port)) {
         std::cerr << "Failed to listen " << local_port << '\n';
         return 1;

@@ -2,12 +2,18 @@
 
 #include <openssl/rand.h>
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
+#else
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <cerrno>
@@ -25,36 +31,88 @@ constexpr char multicast_ip[] = "239.255.42.99";
 constexpr int discovery_port = 38443;
 using Clock = std::chrono::steady_clock;
 
+#ifdef _WIN32
+using Socket = SOCKET;
+using SocketLength = int;
+using PollDescriptor = WSAPOLLFD;
+constexpr Socket invalid_socket = INVALID_SOCKET;
+constexpr int receive_flags = 0;
+
+void initialize_sockets() {
+    struct Runtime {
+        Runtime() {
+            WSADATA data{};
+            const int error = WSAStartup(MAKEWORD(2, 2), &data);
+            if (error != 0) {
+                throw std::system_error(error, std::system_category(), "initializing discovery sockets");
+            }
+        }
+        ~Runtime() { WSACleanup(); }
+    };
+    static Runtime runtime;
+}
+
+void close_socket(Socket socket) { closesocket(socket); }
+int poll_socket(PollDescriptor* socket, int timeout) { return WSAPoll(socket, 1, timeout); }
+bool socket_interrupted() { return WSAGetLastError() == WSAEINTR; }
+int set_socket_option(Socket socket, int level, int option, const void* value, int size) {
+    return setsockopt(socket, level, option, static_cast<const char*>(value), size);
+}
+#else
+using Socket = int;
+using SocketLength = socklen_t;
+using PollDescriptor = pollfd;
+constexpr Socket invalid_socket = -1;
+constexpr int receive_flags = MSG_TRUNC;
+void initialize_sockets() {}
+void close_socket(Socket socket) { close(socket); }
+int poll_socket(PollDescriptor* socket, int timeout) { return poll(socket, 1, timeout); }
+bool socket_interrupted() { return errno == EINTR; }
+int set_socket_option(Socket socket, int level, int option, const void* value, int size) {
+    return setsockopt(socket, level, option, value, static_cast<socklen_t>(size));
+}
+#endif
+
 [[noreturn]] void socket_error(const char* operation) {
+#ifdef _WIN32
+    throw std::system_error(WSAGetLastError(), std::system_category(), operation);
+#else
     throw std::system_error(errno, std::generic_category(), operation);
+#endif
 }
 
 class UdpSocket {
 public:
-    UdpSocket() : fd_(socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0)) {
-        if (fd_ < 0) {
+    UdpSocket() {
+        initialize_sockets();
+#ifdef _WIN32
+        fd_ = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+#else
+        fd_ = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+#endif
+        if (fd_ == invalid_socket) {
             socket_error("creating discovery socket");
         }
     }
     ~UdpSocket() {
-        if (fd_ >= 0) {
-            close(fd_);
+        if (fd_ != invalid_socket) {
+            close_socket(fd_);
         }
     }
     UdpSocket(const UdpSocket&) = delete;
     UdpSocket& operator=(const UdpSocket&) = delete;
-    int get() const { return fd_; }
-    int release() {
-        const int fd = fd_;
-        fd_ = -1;
+    Socket get() const { return fd_; }
+    Socket release() {
+        const Socket fd = fd_;
+        fd_ = invalid_socket;
         return fd;
     }
 
 private:
-    int fd_;
+    Socket fd_ = invalid_socket;
 };
 
-sockaddr_in address(in_addr_t ip, int port) {
+sockaddr_in address(std::uint32_t ip, int port) {
     sockaddr_in result{};
     result.sin_family = AF_INET;
     result.sin_port = htons(static_cast<unsigned short>(port));
@@ -62,7 +120,7 @@ sockaddr_in address(in_addr_t ip, int port) {
     return result;
 }
 
-void bind_socket(int fd, int port) {
+void bind_socket(Socket fd, int port) {
     const auto local = address(INADDR_ANY, port);
     if (bind(fd, reinterpret_cast<const sockaddr*>(&local), sizeof(local)) !=
         0) {
@@ -71,6 +129,39 @@ void bind_socket(int fd, int port) {
 }
 
 std::vector<in_addr> multicast_interfaces() {
+#ifdef _WIN32
+    ULONG size = 16384;
+    std::vector<unsigned char> buffer(size);
+    ULONG error = ERROR_BUFFER_OVERFLOW;
+    for (int attempt = 0; attempt < 3 && error == ERROR_BUFFER_OVERFLOW; ++attempt) {
+        buffer.resize(size);
+        error = GetAdaptersAddresses(AF_INET,
+            GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
+            nullptr, reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data()), &size);
+    }
+    if (error != NO_ERROR && error != ERROR_NO_DATA) {
+        throw std::system_error(error, std::system_category(), "listing discovery interfaces");
+    }
+    std::vector<in_addr> result;
+    if (error == NO_ERROR) {
+        for (auto* adapter = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());
+             adapter; adapter = adapter->Next) {
+            if (adapter->OperStatus != IfOperStatusUp ||
+                adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK ||
+                (adapter->Flags & IP_ADAPTER_NO_MULTICAST)) {
+                continue;
+            }
+            for (auto* entry = adapter->FirstUnicastAddress; entry; entry = entry->Next) {
+                if (entry->Address.lpSockaddr && entry->Address.lpSockaddr->sa_family == AF_INET) {
+                    const auto ip = reinterpret_cast<sockaddr_in*>(entry->Address.lpSockaddr)->sin_addr;
+                    const auto duplicate = std::find_if(result.begin(), result.end(),
+                        [&](const in_addr& value) { return value.s_addr == ip.s_addr; });
+                    if (duplicate == result.end()) result.push_back(ip);
+                }
+            }
+        }
+    }
+#else
     ifaddrs* addresses = nullptr;
     if (getifaddrs(&addresses) != 0) {
         socket_error("listing discovery interfaces");
@@ -88,6 +179,7 @@ std::vector<in_addr> multicast_interfaces() {
                     ->sin_addr);
         }
     }
+#endif
     if (result.empty()) {
         result.push_back(in_addr{INADDR_ANY});
     }
@@ -158,15 +250,17 @@ DiscoveryResponder::DiscoveryResponder(int https_port,
                                        const std::string& fingerprint) {
     UdpSocket socket;
     const int reuse = 1;
-    if (setsockopt(socket.get(), SOL_SOCKET, SO_REUSEADDR, &reuse,
+    if (set_socket_option(socket.get(), SOL_SOCKET, SO_REUSEADDR, &reuse,
                    sizeof(reuse)) != 0) {
         socket_error("setting discovery socket reuse");
     }
     bind_socket(socket.get(), discovery_port);
     bool joined = false;
-    for (const auto& interface : multicast_interfaces()) {
-        const ip_mreq membership{in_addr{inet_addr(multicast_ip)}, interface};
-        if (setsockopt(socket.get(), IPPROTO_IP, IP_ADD_MEMBERSHIP, &membership,
+    for (const auto& network_interface : multicast_interfaces()) {
+        ip_mreq membership{};
+        membership.imr_multiaddr.s_addr = inet_addr(multicast_ip);
+        membership.imr_interface = network_interface;
+        if (set_socket_option(socket.get(), IPPROTO_IP, IP_ADD_MEMBERSHIP, &membership,
                        sizeof(membership)) == 0) {
             joined = true;
         }
@@ -185,14 +279,14 @@ DiscoveryResponder::DiscoveryResponder(int https_port,
 DiscoveryResponder::~DiscoveryResponder() {
     stopping_ = true;
     worker_.join();
-    close(socket_);
+    close_socket(socket_);
 }
 
 void DiscoveryResponder::respond(const std::string& endpoint) {
-    pollfd pending{socket_, POLLIN, 0};
+    PollDescriptor pending{socket_, POLLIN, 0};
     while (!stopping_) {
-        const int ready = poll(&pending, 1, 200);
-        if (ready < 0 && errno != EINTR) {
+        const int ready = poll_socket(&pending, 200);
+        if (ready < 0 && !socket_interrupted()) {
             return;
         }
         if (ready > 0 && !(pending.revents & POLLIN)) {
@@ -204,11 +298,11 @@ void DiscoveryResponder::respond(const std::string& endpoint) {
 
         char buffer[256];
         sockaddr_in sender{};
-        socklen_t size = sizeof(sender);
+        SocketLength size = sizeof(sender);
         const auto received =
-            recvfrom(socket_, buffer, sizeof(buffer), MSG_TRUNC,
+            recvfrom(socket_, buffer, sizeof(buffer), receive_flags,
                      reinterpret_cast<sockaddr*>(&sender), &size);
-        if (received <= 0 || received > static_cast<ssize_t>(sizeof(buffer))) {
+        if (received <= 0 || received > static_cast<int>(sizeof(buffer))) {
             continue;
         }
         std::istringstream input(
@@ -229,8 +323,8 @@ void DiscoveryResponder::respond(const std::string& endpoint) {
 std::vector<RemoteTarget> discover_servers() {
     UdpSocket socket;
     bind_socket(socket.get(), 0);
-    const unsigned char ttl = 1;
-    if (setsockopt(socket.get(), IPPROTO_IP, IP_MULTICAST_TTL, &ttl,
+    const unsigned int ttl = 1;
+    if (set_socket_option(socket.get(), IPPROTO_IP, IP_MULTICAST_TTL, &ttl,
                    sizeof(ttl)) != 0) {
         socket_error("limiting discovery multicast scope");
     }
@@ -239,16 +333,16 @@ std::vector<RemoteTarget> discover_servers() {
     const auto nonce = make_nonce();
     const auto query = std::string(protocol) + " DISCOVER " + nonce;
     std::vector<RemoteTarget> devices;
-    pollfd pending{socket.get(), POLLIN, 0};
+    PollDescriptor pending{socket.get(), POLLIN, 0};
 
     for (int attempt = 0; attempt < 3 && devices.empty(); ++attempt) {
         bool sent = false;
-        for (const auto& interface : interfaces) {
-            if (setsockopt(socket.get(), IPPROTO_IP, IP_MULTICAST_IF,
-                           &interface, sizeof(interface)) == 0 &&
+        for (const auto& network_interface : interfaces) {
+            if (set_socket_option(socket.get(), IPPROTO_IP, IP_MULTICAST_IF,
+                           &network_interface, sizeof(network_interface)) == 0 &&
                 sendto(socket.get(), query.data(), query.size(), 0,
                        reinterpret_cast<const sockaddr*>(&group),
-                       sizeof(group)) == static_cast<ssize_t>(query.size())) {
+                       sizeof(group)) == static_cast<int>(query.size())) {
                 sent = true;
             }
         }
@@ -262,8 +356,8 @@ std::vector<RemoteTarget> discover_servers() {
                 std::chrono::duration_cast<std::chrono::milliseconds>(deadline -
                                                                       now);
             const int ready =
-                poll(&pending, 1, static_cast<int>(remaining.count()) + 1);
-            if (ready < 0 && errno == EINTR) {
+                poll_socket(&pending, static_cast<int>(remaining.count()) + 1);
+            if (ready < 0 && socket_interrupted()) {
                 continue;
             }
             if (ready < 0 || (ready > 0 && !(pending.revents & POLLIN))) {
@@ -275,12 +369,12 @@ std::vector<RemoteTarget> discover_servers() {
             }
             char buffer[256];
             sockaddr_in sender{};
-            socklen_t size = sizeof(sender);
+            SocketLength size = sizeof(sender);
             const auto received =
-                recvfrom(socket.get(), buffer, sizeof(buffer), MSG_TRUNC,
+                recvfrom(socket.get(), buffer, sizeof(buffer), receive_flags,
                          reinterpret_cast<sockaddr*>(&sender), &size);
             if (received <= 0 ||
-                received > static_cast<ssize_t>(sizeof(buffer))) {
+                received > static_cast<int>(sizeof(buffer))) {
                 continue;
             }
             RemoteTarget target{};

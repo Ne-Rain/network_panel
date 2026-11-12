@@ -188,9 +188,10 @@ void publish_upload(std::size_t id,
     std::remove(temp_path.c_str());
 }
 
-static void handle_whoami(const httplib::Request& req,
-                          httplib::Response& res,
-                          const std::unordered_map<std::string, GroupAccount>& accounts) {
+namespace {
+void handle_whoami(const httplib::Request& req,
+                   httplib::Response& res,
+                   const std::unordered_map<std::string, GroupAccount>& accounts) {
     std::string group;
     const bool valid = req.get_header_value_count("Authorization") == 1
         && authenticate_basic(req.get_header_value("Authorization"), accounts, group);
@@ -204,11 +205,11 @@ static void handle_whoami(const httplib::Request& req,
     res.set_content(group, "text/plain");
 }
 
-static void handle_get_file(const httplib::Request& req,
-                            httplib::Response& res,
-                            const std::unordered_map<std::string, GroupAccount>& accounts,
-                            std::unordered_map<std::size_t, FileRecord>& file_list,
-                            std::mutex& file_mtx) {
+void handle_get_file(const httplib::Request& req,
+                     httplib::Response& res,
+                     const std::unordered_map<std::string, GroupAccount>& accounts,
+                     std::unordered_map<std::size_t, FileRecord>& file_list,
+                     std::mutex& file_mtx) {
     std::string group;
     std::size_t auth_header_vaule_count = req.get_header_value_count("Authorization");
     if (auth_header_vaule_count == 0) {
@@ -237,11 +238,11 @@ static void handle_get_file(const httplib::Request& req,
     res.set_content(json_file, "application/json");
 }
 
-static void handle_download(const httplib::Request& req,
-                            httplib::Response& res,
-                            const std::unordered_map<std::string, GroupAccount>& accounts,
-                            std::unordered_map<std::size_t, FileRecord>& file_list,
-                            std::mutex& file_mtx) {
+void handle_download(const httplib::Request& req,
+                     httplib::Response& res,
+                     const std::unordered_map<std::string, GroupAccount>& accounts,
+                     std::unordered_map<std::size_t, FileRecord>& file_list,
+                     std::mutex& file_mtx) {
     std::string group;
     std::size_t auth_header_vaule_count = req.get_header_value_count("Authorization");
     if (auth_header_vaule_count == 0) {
@@ -276,15 +277,15 @@ static void handle_download(const httplib::Request& req,
     res.set_file_content(record.storage_path, "application/octet-stream");
 }
 
-static void handle_upload(const httplib::Request& req,
-                          httplib::Response& res,
-                          const httplib::ContentReader& reader,
-                          const std::unordered_map<std::string, GroupAccount>& accounts,
-                          std::unordered_map<std::size_t, FileRecord>& file_list,
-                          std::mutex& file_id_mtx,
-                          std::size_t& last_file_id,
-                          std::mutex& file_mtx,
-                          std::string upload_dir) {
+void handle_upload(const httplib::Request& req,
+                   httplib::Response& res,
+                   const httplib::ContentReader& reader,
+                   const std::unordered_map<std::string, GroupAccount>& accounts,
+                   std::unordered_map<std::size_t, FileRecord>& file_list,
+                   std::mutex& file_id_mtx,
+                   std::size_t& last_file_id,
+                   std::mutex& file_mtx,
+                   std::string upload_dir) {
     std::string group;
     if (req.get_header_value_count("Authorization") != 1
         || !authenticate_basic(req.get_header_value("Authorization"), accounts, group)) {
@@ -331,11 +332,11 @@ static void handle_upload(const httplib::Request& req,
     res.set_content(std::to_string(id), "text/plain");
 }
 
-static void handle_delete(const httplib::Request& req,
-                          httplib::Response& res,
-                          const std::unordered_map<std::string, GroupAccount>& accounts,
-                          std::unordered_map<std::size_t, FileRecord>& file_list,
-                          std::mutex& file_mtx) {
+void handle_delete(const httplib::Request& req,
+                   httplib::Response& res,
+                   const std::unordered_map<std::string, GroupAccount>& accounts,
+                   std::unordered_map<std::size_t, FileRecord>& file_list,
+                   std::mutex& file_mtx) {
     std::string group;
     if (req.get_header_value_count("Authorization") != 1
         || !authenticate_basic(req.get_header_value("Authorization"), accounts, group)) {
@@ -425,7 +426,7 @@ static void handle_delete(const httplib::Request& req,
     }
     res.status = 204;
 }
-
+} // namespace
 int main() {
     DeviceIdentity identity;
     try {
@@ -438,6 +439,7 @@ int main() {
 
     // 1. 创建https服务对象
     httplib::SSLServer server(identity.pem_path.c_str(), identity.pem_path.c_str());
+    server.set_payload_max_length(std::size_t{5} * 1024 * 1024 * 1024 * 1024);
     if (!server.is_valid()) {
         std::cerr << "HTTPS 初始化失败，请检查证书和私钥\n";
         return 1;
