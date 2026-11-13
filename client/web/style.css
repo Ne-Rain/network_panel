@@ -6,7 +6,7 @@
     --muted: #606060;
     --control-line: #8a8a8a;
     --line: #e5e5e5;
-    --page-width: min(1160px, 100% - 64px);
+    --page-width: calc(100% - 80px);
     --page-padding: 32px;
     --panel-radius: 12px;
     --control-radius: 8px;
@@ -174,7 +174,7 @@ button:disabled { cursor: wait; opacity: .55; }
 .transfer-list { display: grid; gap: 12px; }
 .upload-task {
     display: grid;
-    grid-template-columns: minmax(150px, 1fr) minmax(160px, 240px) 90px 80px;
+    grid-template-columns: minmax(150px, 1fr) minmax(160px, 240px) 90px 80px 72px;
     align-items: center;
     gap: 20px;
     padding: 22px 18px;
@@ -191,6 +191,8 @@ button:disabled { cursor: wait; opacity: .55; }
 .task-progress { display: block; width: 100%; height: 5px; accent-color: var(--ink); }
 .task-speed, .task-time { font-size: 13px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .task-time { text-align: end; }
+.task-cancel { justify-self: end; font-size: 13px; }
+.task-cancel:disabled { cursor: default; }
 .upload-task[data-state="failed"] .task-message { color: #ba3737; }
 .upload-task[data-state="success"] .task-message { color: #34734d; }
 #uploads-empty > .icon, .download-placeholder > .icon { width: 32px; height: 32px; margin-bottom: 14px; color: #929292; }
@@ -203,7 +205,7 @@ button:disabled { cursor: wait; opacity: .55; }
     .transfer-toolbar { align-items: flex-start; gap: 12px; flex-wrap: wrap; }
     .transfer-filters { gap: 18px; }
     .transfer-toolbar .button { min-height: 36px; padding: 6px 10px; font-size: 14px; }
-    .upload-task { grid-template-columns: minmax(0, 1fr) auto; gap: 16px; padding: 18px 14px; }
+    .upload-task { grid-template-columns: minmax(0, 1fr) auto auto; gap: 16px; padding: 18px 14px; }
     .task-name-group, .task-progress-group { grid-column: 1 / -1; }
     .task-speed { grid-column: 1; }
     .task-time { grid-column: 2; }
@@ -233,6 +235,7 @@ h1 { font-size: clamp(24px, 4vw, 32px); line-height: 1.25; letter-spacing: -.025
 .table-container::-webkit-scrollbar-button:vertical { display: none; height: 0; }
 .has-scrollable-files thead th { position: sticky; top: 0; z-index: 1; }
 table {
+    --file-text-size: 14px;
     --file-checkbox-size: 13px;
     --file-name-gap: 10px;
     --file-name-padding: 10px;
@@ -242,17 +245,18 @@ table {
     table-layout: fixed;
     border-collapse: collapse;
     text-align: left;
+    font-size: var(--file-text-size);
 }
 th:first-child { width: 53%; }
 th:nth-child(2) { width: 9.5%; }
 th:nth-child(3) { width: 9.5%; }
 th:nth-child(4) { width: 9.5%; }
 th:nth-child(5) { width: 18.5%; }
-th, td { padding: 10px 16px; vertical-align: middle; white-space: nowrap; }
+th, td { padding: 10px 24px; vertical-align: middle; white-space: nowrap; }
 th:first-child {
     padding-inline-start: calc(var(--file-name-padding) + var(--file-checkbox-size) + var(--file-name-gap));
 }
-th { background: var(--surface); color: var(--muted); font-size: 14px; font-weight: 650; }
+th { background: var(--surface); color: var(--muted); font-size: var(--file-text-size); font-weight: 650; }
 .sort-button {
     display: inline-grid;
     place-content: center;

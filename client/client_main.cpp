@@ -440,21 +440,32 @@ void handle_upload(const httplib::Request& req,
         return;
     }
     it->second.total_bytes = content_length;
-    it->second.state = TaskState::Running;
+    it->second.state = content_length == 0 ? TaskState::Confirming : TaskState::Running;
     lock.unlock();
 
     bool body_consumed = false;
 
     // 分块持续发送
-    httplib::ContentProvider provider = [&](std::size_t offset,
-                                            std::size_t remaining,
-                                            httplib::DataSink& sink) {
-        if (body_consumed || offset != 0 || remaining != content_length) {
-            return false;
-        }
-        body_consumed = true;
-        return reader([&](const char* data, std::size_t size) { return sink.write(data, size); });
-    };
+    httplib::ContentProvider provider =
+        [&](std::size_t offset, std::size_t remaining, httplib::DataSink& sink) {
+            if (body_consumed || offset != 0 || remaining != content_length) {
+                return false;
+            }
+            body_consumed = true;
+            return reader([&](const char* data, std::size_t size) {
+                {
+                    std::lock_guard<std::mutex> lock(task_mtx);
+                    auto it = task_set.find(task_id);
+                    if (it == task_set.end()) {
+                        return false;
+                    }
+                    if (it->second.sent_bytes + size >= it->second.total_bytes) {
+                        it->second.state = TaskState::Confirming;
+                    }
+                }
+                return sink.write(data, size);
+            });
+        };
     auto progress = [&](std::size_t current, std::size_t total) {
         std::lock_guard<std::mutex> lock(task_mtx);
         auto it = task_set.find(task_id);
@@ -462,9 +473,6 @@ void handle_upload(const httplib::Request& req,
             return false;
         }
         it->second.sent_bytes = current;
-        if (current == total) {
-            it->second.state = TaskState::Confirming;
-        }
         return true;
     };
     auto result = client.Post("/files?name=" + filename,
@@ -476,7 +484,7 @@ void handle_upload(const httplib::Request& req,
     {
         std::lock_guard<std::mutex> lk(task_mtx);
         auto task_it = task_set.find(task_id);
-        if (task_it == task_set.end() || it->second.owner_session_id != session.session_id) {
+        if (task_it == task_set.end() || task_it->second.owner_session_id != session.session_id) {
             res.status = 404;
             return;
         }
@@ -630,6 +638,39 @@ void handle_task_state(const httplib::Request& req,
     res.status = 200;
     res.set_content(json, "application/json");
 }
+
+void handle_delete_task(const httplib::Request& req,
+                        httplib::Response& res,
+                        const RemoteTarget& target,
+                        std::unordered_map<std::string, TaskRecord>& task_set,
+                        std::mutex& task_mtx) {
+    httplib::SSLClient client(target.host, target.port);
+    verify_remote_peer(client, target.fingerprint);
+    Session session;
+    const auto state = load_session(req, session, target.fingerprint);
+    if (state != SessionState::Valid) {
+        if (state == SessionState::Invalid) {
+            clear_session_cookie(res);
+        }
+        res.status = 401;
+        return;
+    }
+    std::string task_id = req.matches[1].str();
+    {
+        std::lock_guard<std::mutex> lock(task_mtx);
+        auto it = task_set.find(task_id);
+        if (it == task_set.end() || it->second.owner_session_id != session.session_id) {
+            res.status = 404;
+            return;
+        }
+        if (it->second.state == TaskState::Restart || it->second.state == TaskState::Running) {
+            task_set.erase(it);
+            res.status = 204;
+            return;
+        }
+    }
+    res.status = 409;
+}
 } // namespace
 
 int main() {
@@ -713,6 +754,16 @@ int main() {
                 return;
             }
             handle_task_state(req, res, target, task_set, task_mtx);
+        });
+    local.Delete(
+        "/api/task/([0-9a-f]{64})",
+        [&discovery, &task_set, &task_mtx](const httplib::Request& req, httplib::Response& res) {
+            RemoteTarget target{};
+            if (!discovery.target(target)) {
+                res.status = 503;
+                return;
+            }
+            handle_delete_task(req, res, target, task_set, task_mtx);
         });
     if (!local.listen("127.0.0.1", local_port)) {
         std::cerr << "Failed to listen " << local_port << '\n';

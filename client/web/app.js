@@ -328,7 +328,7 @@ function setAccount(identity) {
     groupLabel.textContent = account?.group || "";
     groupLabel.title = groupLabel.textContent;
     loginLink.hidden = Boolean(account);
-    uploadButton.disabled = refreshButton.disabled && Boolean(account);
+    uploadButton.disabled = refreshButton.disabled && Boolean(account) && !activeUploadTask;
     taskUploadButton.disabled = uploadButton.disabled;
     filesPanel.setAttribute("aria-label", account ? "本组文件与公共文件" : "公共文件");
     document.getElementById("empty-description").textContent = account
@@ -459,7 +459,7 @@ function showFileMessage(message, isError = false) {
 
 function setFilesBusy(busy) {
     refreshButton.disabled = busy;
-    uploadButton.disabled = busy && Boolean(account);
+    uploadButton.disabled = busy && Boolean(account) && !activeUploadTask;
     taskUploadButton.disabled = uploadButton.disabled;
     for (const button of fileRows.querySelectorAll(".delete-action")) {
         button.disabled = busy || !account;
@@ -696,6 +696,7 @@ async function connectServer(confirm = false, startup = false) {
         discoveryRetry.disabled = false;
         discoveryTrust.disabled = false;
         setFilesBusy(false);
+        pumpUploadQueue();
     }
 }
 
@@ -717,7 +718,9 @@ function clearUploadTasks() {
         task.discarded = true;
         clearTimeout(task.pollTimer);
         task.pollController?.abort();
+        task.cancelController?.abort();
         task.request?.abort();
+        task.file = null;
     }
     uploadTasks.length = 0;
     if (activeUploadTask) {
@@ -744,6 +747,7 @@ function renderUploadTasks() {
     uploadsEmpty.hidden = visibleTasks.length !== 0;
     const rows = document.createDocumentFragment();
     const labels = {
+        queued: "等待上传",
         preparing: "正在准备上传",
         running: "正在上传",
         confirming: "正在等待服务器确认",
@@ -751,7 +755,7 @@ function renderUploadTasks() {
         failed: "上传失败",
         unknown: "结果待确认"
     };
-    for (const task of [...visibleTasks].reverse()) {
+    for (const task of uploadFilter === "active" ? visibleTasks : [...visibleTasks].reverse()) {
         const row = document.createElement("article");
         row.className = "upload-task";
         row.dataset.state = task.state;
@@ -769,7 +773,8 @@ function renderUploadTasks() {
         name.title = task.name;
         const message = document.createElement("p");
         message.className = "task-message";
-        message.textContent = task.message || task.notice || labels[task.state];
+        message.textContent = task.cancelling ? "正在请求取消…"
+            : task.message || task.cancelNotice || task.notice || labels[task.state];
         nameText.append(name, message);
         nameGroup.append(badge, nameText);
         const progressGroup = document.createElement("div");
@@ -790,16 +795,86 @@ function renderUploadTasks() {
         speed.className = "task-speed";
         speed.textContent = task.state === "running"
             ? formatFileSize(BigInt(Math.max(0, Math.round(task.speed)))) + "/s" : "—";
-        const elapsed = Math.max(0, Math.floor(((task.endedAt || Date.now()) - task.startedAt) / 1000));
+        const elapsed = task.startedAt
+            ? Math.max(0, Math.floor(((task.endedAt || Date.now()) - task.startedAt) / 1000)) : 0;
         const time = document.createElement("p");
         time.className = "task-time";
         time.title = "已用时间";
         time.textContent = [Math.floor(elapsed / 3600), Math.floor(elapsed / 60) % 60, elapsed % 60]
             .map(value => String(value).padStart(2, "0")).join(":");
         row.append(nameGroup, progressGroup, speed, time);
+        if (!task.finished) {
+            const cancel = document.createElement("button");
+            cancel.type = "button";
+            cancel.className = "text-action task-cancel";
+            cancel.textContent = task.cancelling ? "取消中…" : "取消";
+            cancel.setAttribute("aria-label", "取消上传 " + task.name);
+            cancel.disabled = task.state !== "queued" && (task.cancelling || !task.id || task.total === 0n
+                || task.cancelBlocked || !["preparing", "running"].includes(task.state));
+            cancel.title = cancel.disabled && !task.cancelling
+                ? "仅可取消已创建且尚未进入确认阶段的非空上传" : "取消此上传";
+            cancel.addEventListener("click", () => cancelUploadTask(task));
+            row.append(cancel);
+        }
         rows.append(row);
     }
     uploadTaskList.replaceChildren(rows);
+}
+
+async function cancelUploadTask(task) {
+    if (task.state === "queued" && !task.discarded) {
+        task.discarded = true;
+        task.file = null;
+        const index = uploadTasks.indexOf(task);
+        if (index !== -1) uploadTasks.splice(index, 1);
+        renderUploadTasks();
+        return;
+    }
+    if (task.cancelling || task.finished || task.discarded || !task.id ||
+        task.total === 0n || task.cancelBlocked ||
+        !["preparing", "running"].includes(task.state)) return;
+    task.cancelling = true;
+    task.cancelNotice = "";
+    const cancelController = new AbortController();
+    task.cancelController = cancelController;
+    const cancelTimeout = setTimeout(() => cancelController.abort(), 10000);
+    task.cancelPromise = (async () => {
+        try {
+            const response = await fetch("/api/task/" + encodeURIComponent(task.id), {
+                method: "DELETE",
+                mode: "same-origin",
+                signal: cancelController.signal
+            });
+            if (task.discarded) return;
+            if (response.status === 204) {
+                task.discarded = true;
+                clearTimeout(task.pollTimer);
+                task.pollController?.abort();
+                task.request?.abort();
+                const index = uploadTasks.indexOf(task);
+                if (index !== -1) uploadTasks.splice(index, 1);
+                showFileMessage("已取消上传 " + task.name + "。");
+            } else if (response.status === 409) {
+                task.cancelBlocked = true;
+                task.cancelNotice = "任务已进入不可取消阶段，正在等待上传结果。";
+            } else if (response.status === 401) {
+                expireSession();
+            } else {
+                task.cancelNotice = "取消未成功（HTTP " + response.status + "），上传结果仍以原请求为准。";
+            }
+        } catch {
+            if (!task.discarded) {
+                task.cancelNotice = "无法确认取消结果，请重试取消或等待上传结果。";
+            }
+        } finally {
+            clearTimeout(cancelTimeout);
+            task.cancelling = false;
+            if (!task.discarded) renderUploadTasks();
+        }
+    })();
+    renderUploadTasks();
+    await task.cancelPromise;
+    renderUploadTasks();
 }
 
 uploadsActive.addEventListener("click", () => {
@@ -820,7 +895,8 @@ function finishUploadTask(task, state, message) {
     task.pollController?.abort();
     task.request = null;
     if (!task.discarded) {
-        uploadFilter = "finished";
+        uploadFilter = uploadTasks.some(item => item.state === "queued" && !item.discarded)
+            ? "active" : "finished";
         renderUploadTasks();
     }
 }
@@ -889,33 +965,50 @@ function readUploadId(responseText) {
     }
 }
 
-uploadInput.addEventListener("change", async () => {
-    const file = uploadInput.files[0];
+uploadInput.addEventListener("change", () => {
+    const files = Array.from(uploadInput.files);
     uploadInput.value = "";
-    if (!file || !account || uploadButton.disabled) {
-        return;
-    }
+    if (!files.length || !account || !serverReady || discoveryBusy || deleting) return;
+    for (const file of files) {
 
     const task = {
         name: file.name,
+        file,
         id: "",
         total: BigInt(file.size),
         sent: 0n,
         speed: 0,
         sampledAt: performance.now(),
-        startedAt: Date.now(),
-        state: "preparing",
+        startedAt: 0,
+        state: "queued",
         finished: false,
         discarded: false,
         message: "",
         notice: ""
     };
     uploadTasks.push(task);
-    activeUploadTask = task;
+    }
     uploadFilter = "active";
     renderUploadTasks();
     location.hash = "uploads";
+    pumpUploadQueue();
+});
+
+function pumpUploadQueue() {
+    if (activeUploadTask || !account || !serverReady || discoveryBusy || deleting) return;
+    const task = uploadTasks.find(item => item.state === "queued" && !item.discarded);
+    if (!task) return;
+    activeUploadTask = task;
+    task.state = "preparing";
+    task.startedAt = Date.now();
+    task.sampledAt = performance.now();
+    void runUploadTask(task);
+}
+
+async function runUploadTask(task) {
+    const file = task.file;
     setFilesBusy(true);
+    renderUploadTasks();
     showFileMessage("正在上传 " + file.name + "…");
     let failureState = "failed";
 
@@ -940,6 +1033,7 @@ uploadInput.addEventListener("change", async () => {
         pollUploadTask(task);
         failureState = "unknown";
         const response = await sendFile(file, task);
+        await task.cancelPromise;
         if (task.discarded) return;
         failureState = "failed";
         if (response.status === 401) {
@@ -966,18 +1060,21 @@ uploadInput.addEventListener("change", async () => {
             showFileMessage(confirmation + " " + error.message, true);
         }
     } catch (error) {
+        await task.cancelPromise;
         if (task.discarded) return;
         const message = error.message || "上传失败，请稍后重试。";
         finishUploadTask(task, failureState, message);
         showFileMessage(message, true);
     } finally {
         task.request = null;
+        task.file = null;
         if (activeUploadTask === task) {
             activeUploadTask = null;
-            setFilesBusy(false);
+            pumpUploadQueue();
+            setFilesBusy(Boolean(activeUploadTask) || discoveryBusy || deleting);
         }
     }
-});
+}
 
 renderUploadTasks();
 showView(location.hash === "#login");
