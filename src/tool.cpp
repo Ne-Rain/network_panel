@@ -10,6 +10,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 bool decode_base64(const std::string& encoded, std::string& decoded) {
@@ -61,6 +62,25 @@ bool string_to_size_t(const std::string& s, std::size_t& value) {
     return true;
 }
 
+void append_json_string(std::string& out, const std::string& value) {
+    constexpr char hex[] = "0123456789abcdef";
+    out += '"';
+    for (char ch : value) {
+        const auto byte = static_cast<unsigned char>(ch);
+        if (byte < 0x20) {
+            out += "\\u00";
+            out += hex[byte >> 4];
+            out += hex[byte & 0x0f];
+        } else {
+            if (ch == '"' || ch == '\\') {
+                out += '\\';
+            }
+            out += ch;
+        }
+    }
+    out += '"';
+}
+
 std::string make_local_time() {
     const std::time_t now = std::time(nullptr);
     std::tm local_time{};
@@ -88,4 +108,43 @@ std::string make_rand_id() {
         id += hex[byte & 0x0f];
     }
     return id;
+}
+
+std::string encode_query_value(const std::string& value) {
+    static constexpr char hex[] = "0123456789ABCDEF";
+    std::string result;
+
+    for (unsigned char c : value) {
+        const bool unreserved = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+            || (c >= '0' && c <= '9') || c == '-' || c == '.' || c == '_' || c == '~';
+
+        if (unreserved) {
+            result += static_cast<char>(c);
+        } else {
+            result += '%';
+            result += hex[c >> 4];
+            result += hex[c & 0x0F];
+        }
+    }
+
+    return result;
+}
+
+// 创建临时路径 mkstemp()生成一个唯一的临时文件名，并在同一步创建文件
+std::string make_tmp_path(const std::string& tmp_dir) {
+    const std::string pattern = tmp_dir + "netpanel-" + "-XXXXXX";
+
+    // mkstemp 会原地替换末尾的六个 X，需要可写的字符数组
+    std::vector<char> path(pattern.begin(), pattern.end());
+    path.push_back('\0');
+    const int fd = ::mkstemp(path.data());
+    if (fd == -1) {
+        throw std::system_error(errno, std::generic_category(), "Failed to create temp dir");
+    }
+    if (::close(fd) == -1) {
+        const int error = errno;
+        ::unlink(path.data());
+        throw std::system_error(error, std::generic_category(), "Failed to close temp dir");
+    }
+    return std::string(path.data());
 }

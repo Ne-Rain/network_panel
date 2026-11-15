@@ -30,25 +30,6 @@ static const std::string config_files = "./config/files.txt";
 static const std::string config_upload_dir = "./config/upload_dir.txt";
 static const std::string config_groups = "./config/groups.txt";
 
-static void append_json_string(std::string& out, const std::string& value) {
-    constexpr char hex[] = "0123456789abcdef";
-    out += '"';
-    for (char ch : value) {
-        const auto byte = static_cast<unsigned char>(ch);
-        if (byte < 0x20) {
-            out += "\\u00";
-            out += hex[byte >> 4];
-            out += hex[byte & 0x0f];
-        } else {
-            if (ch == '"' || ch == '\\') {
-                out += '\\';
-            }
-            out += ch;
-        }
-    }
-    out += '"';
-}
-
 static void make_file_listing(FileRecord record, std::string& json) {
     json += "{\"id\":";
     append_json_string(json, std::to_string(record.file_id));
@@ -89,27 +70,6 @@ std::size_t reserve_file_id(std::mutex& id_mtx, std::size_t& last_file_id) {
     return next_id;
 }
 
-/**创建临时路径
-    mkstemp()生成一个唯一的临时文件名，并在同一步创建文件
-*/
-std::string make_tmp_path(const std::string& tmp_dir, std::size_t id) {
-    const std::string pattern = tmp_dir + "upload-" + std::to_string(id) + "-XXXXXX";
-
-    // mkstemp 会原地替换末尾的六个 X，需要可写的字符数组
-    std::vector<char> path(pattern.begin(), pattern.end());
-    path.push_back('\0');
-    const int fd = ::mkstemp(path.data());
-    if (fd == -1) {
-        throw std::system_error(errno, std::generic_category(), "Failed to create temp dir");
-    }
-    if (::close(fd) == -1) {
-        const int error = errno;
-        ::unlink(path.data());
-        throw std::system_error(error, std::generic_category(), "Failed to close temp dir");
-    }
-    return std::string(path.data());
-}
-
 void publish_upload(std::size_t id,
                     const std::string& name,
                     std::uint64_t file_size,
@@ -139,7 +99,7 @@ void publish_upload(std::size_t id,
             throw std::runtime_error("Duplicate file ID");
         }
 
-        catalog_tmp = make_tmp_path("./config/", 0);
+        catalog_tmp = make_tmp_path("./config/");
         std::ofstream out(catalog_tmp, std::ios::trunc);
         if (!out) {
             throw std::runtime_error("Failed to open temporary file catalog");
@@ -303,7 +263,7 @@ void handle_upload(const httplib::Request& req,
         return;
     }
     const auto id = reserve_file_id(file_id_mtx, last_file_id);
-    const auto temp_path = make_tmp_path(upload_dir, id);
+    const auto temp_path = make_tmp_path(upload_dir);
 
     std::ofstream out(temp_path, std::ios::binary);
     if (!out) {
@@ -381,11 +341,11 @@ void handle_delete(const httplib::Request& req,
                 throw std::runtime_error("Failed to write temporary file catalog");
             }
         };
-        backups = make_tmp_path("./config/", 0);
+        backups = make_tmp_path("./config/");
         memory_to_disk(backups);
 
         next_files.erase(file_id);
-        catalog_tmp = make_tmp_path("./config/", 0);
+        catalog_tmp = make_tmp_path("./config/");
 
         memory_to_disk(catalog_tmp);
 
